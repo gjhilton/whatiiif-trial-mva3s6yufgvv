@@ -1,6 +1,5 @@
-# whatiiif: template only. Copies of the template call this from their Update workflow (update.yml), at the tag of
-# their major version (v1 for 1.x). It runs the copy's own engine/ci/update.sh, which opens a pull request when a
-# newer release is out.
+# whatiiif: template only. Copies of the template call this from their Update workflow (update.yml), at the v0
+# tag. It runs the copy's own engine/ci/update.sh, which opens a pull request when a newer release is out.
 name: Offer update
 
 on:

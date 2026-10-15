@@ -56,18 +56,6 @@ const states = {
   // from its <noscript>, and the page's own script left out.
   'the page without JavaScript': { query: '', ready: '.fallback img', withoutScript: true },
   'the settings helper': { query: 'settings.html', ready: 'textarea' },
-  'the notes helper': { query: 'notes.html', ready: '.note-area' },
-  'the notes helper with a note open, changed, and a mistake pointed out': {
-    query: 'notes.html',
-    ready: '.note-area',
-    act: async (page) => {
-      await page.getByRole('button', { name: /^Note 1: / }).click();
-      await page.getByRole('textbox', { name: 'Title', exact: true }).fill('');
-      await page.getByRole('button', { name: /^Note 2: / }).click();
-      await page.locator('.note-problems').waitFor();
-    },
-  },
-  'the page as a preview of notes being written': { query: '?notes-draft', ready: '.preview-banner' },
   'the page on its tour of the notes': {
     query: '?viewer=openseadragon',
     ready: '.note-marker',

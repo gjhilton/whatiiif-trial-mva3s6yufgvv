@@ -1,4 +1,4 @@
-# ![WhatIIIF](engine/artwork/whatiiif-logo.png)
+# ![WhatIIIF](engine/artwork/whatiffflogo.png)
 
 **See the demo: [gjhilton.github.io/whatiiif-demo](https://gjhilton.github.io/whatiiif-demo/)**
 
@@ -49,7 +49,7 @@ You need a free GitHub account, and nothing else: everything below happens in yo
 | **IIIF** | The picture is published as a [IIIF](https://iiif.io) image service and manifest, so it opens in any IIIF viewer. |
 
 **Later, if you want them:** [notes on the picture, and a tour](#going-further-notes-on-the-picture-and-a-tour) that visitors
-can step through, written with your site's notes helper. Your site does not need them, and you can add them at any time.
+can step through. Your site does not need them, and you can add them at any time.
 
 ## Make your site
 
@@ -108,8 +108,6 @@ Click **Commit changes** and the site rebuilds itself. For a longer description,
   ink = "#222222"   # text, lines, and the button that is selected
   ```
 
-- **The footer:** a small line at the foot of the page says "Published with WhatIIIF" and which version, linking to
-  WhatIIIF. To leave it out, write `footer = false` under `[publish]`, or untick it in the settings helper.
 - Every setting is explained in [the template's own copy of the file](https://github.com/gjhilton/WhatIIIF/blob/main/content/whatiiif.toml),
   which may list settings that are newer than your copy.
 
@@ -135,27 +133,6 @@ they make a tour that visitors step through, the viewer moving to each part in t
 
 ![The notes demo on its tour: a lighthouse in a drawing of a harbour, numbered markers on the picture, and below it the first of five notes, with Back and Next](engine/artwork/notes-demo.png)
 
-The easiest way to write them is your site's **notes helper**, at
-`https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/notes.html`:
-
-1. Zoom in on a part of the picture and choose **Add a note for the part in view**, or choose **Draw a new note's
-   part** and drag round it.
-2. Give the note a title and what you want to say. Add as many as you like, and use the arrows beside them to put them
-   in the order of the tour.
-3. To change a note's part, open the note and choose **Show it**. Then drag its number on the picture to move the part,
-   or a corner to change its size. Or zoom in on another part and choose **Use the part in view**.
-4. Choose **Preview them on your site** to see the notes and their tour as your visitors will.
-5. Under **Put them on your site**, copy the `notes.md` it writes, follow its link to GitHub, paste it in, and click
-   **Commit changes**. The helper tells you when your site has them.
-
-![The notes helper: the picture beside the list of notes, the first note open, its part outlined on the picture with a corner to drag at each corner](engine/artwork/notes-helper.png)
-
-It starts from your notes as they are, so come back to it to change them. Your browser keeps your changes until your
-site has them, so you can leave and come back. Keep the helper open in one tab: one opened in a second tab waits until
-the first is closed. The helper checks the notes as the build will, and takes you to any that need fixing.
-
-Or write `content/notes.md` yourself:
-
 1. On your site, zoom in on the part you want to write about, and copy **Link to this view**.
 2. In your repository, open the **content** folder and choose **Add file → Create new file**. Call it `notes.md`.
 3. Write each note as a heading that links to its part of the picture, followed by what you want to say. Anything
@@ -176,9 +153,7 @@ Or write `content/notes.md` yourself:
 4. Click **Commit changes**. The tour follows the notes in the order they are written.
 
 For other languages, add `notes.cy.md` and so on, with the same notes in the same order; their headings need no
-links, as the notes in `notes.md` say where each part is: `## Y goleudy`. The notes helper then has a place for each
-note in each language, keeps them in step as you move notes about, and gives you every file that changed to upload
-together.
+links, as the notes in `notes.md` say where each part is: `## Y goleudy`.
 
 The notes are also written into the manifest, as IIIF annotations, so other IIIF viewers can show them: Mirador opens
 with its own list of them, where there is room beside the picture.

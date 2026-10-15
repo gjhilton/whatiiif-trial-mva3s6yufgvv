@@ -37,7 +37,6 @@ quality = 70
 [publish]
 full = false
 original = false
-footer = false
 
 [colours]
 paper = "#fdf6e3"

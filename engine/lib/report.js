@@ -26,7 +26,7 @@ export function builtSummary({ pageUrl, manifestId, bytes, droppedFull, image, c
   const rows = [
     ['Picture', `${plain(image.name)}, ${number(site.width)} × ${number(site.height)} pixels`],
     ['Published', `${megabytes(bytes)} of tiles${site.fullUrl ? ' and a full-size JPEG' : droppedFull ? ', without the full-size JPEG, to fit GitHub Pages' : ''}`],
-    ['Notes', site.notes ? `${notesRow(site)}. [Change them with the notes helper](${pageUrl}notes.html)` : `None. [Add some with the notes helper](${pageUrl}notes.html)`],
+    ...(site.notes ? [['Notes', notesRow(site)]] : []),
     ['IIIF manifest', manifestId],
     ['Settings', `[Change them with the settings helper](${pageUrl}settings.html)`],
   ];

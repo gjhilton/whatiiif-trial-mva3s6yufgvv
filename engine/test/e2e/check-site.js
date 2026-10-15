@@ -12,7 +12,6 @@ import { chromium } from 'playwright';
 import { expectedRequests } from '../../lib/service.js';
 import { schemaProblems, schemaUnavailable } from '../support/schema.js';
 import { browse, until, zoomToFullResolution } from '../support/harness.js';
-import { published as onSite } from '../support/published.js';
 
 const siteUrl = process.env.E2E_SITE_URL?.replace(/\/+$/, '');
 const dist = process.env.E2E_DIST;
@@ -21,8 +20,20 @@ if (!siteUrl) throw new Error('Set E2E_SITE_URL to the address of the site to ch
 const fileFor = dist && ((path) => join(dist, path));
 const json = async (path) => JSON.parse(dist ? await readFile(join(dist, path), 'utf8') : await (await fetch(`${siteUrl}/${path}`)).text());
 
-/** Whether a file is published: in the folder, or on the live site, asked again as support/published.js says. */
-const published = (path) => (dist ? readFile(join(dist, path)).then(() => true, () => false) : onSite(`${siteUrl}/${path}`));
+/**
+ * Whether a file is published. Over the network a connection now and then times out among the thousand or so
+ * requests a big picture needs, so a request that fails without an answer is tried again; a 404 is an answer.
+ */
+async function published(path) {
+  if (dist) return readFile(join(dist, path)).then(() => true, () => false);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await fetch(`${siteUrl}/${path}`, { method: 'HEAD' })).ok;
+    } catch (error) {
+      if (attempt === 3) throw new Error(`${path} could not be reached: ${error.cause?.code ?? error.message}`);
+    }
+  }
+}
 
 let browser;
 before(async () => {
@@ -79,25 +90,6 @@ test('a shared link shows a picture that is published', async () => {
   assert.ok(picture?.startsWith(`${siteUrl}/`), `og:image is ${picture}`);
   assert.equal(await published(picture.slice(siteUrl.length + 1)), true);
   assert.equal(await published('icon.png'), true, 'the icon browsers show for the page');
-});
-
-test('the notes helper opens with the site\'s notes, or none, ready to change', async () => {
-  const { notes } = await json('site.json');
-  const { page, problems, close } = await browse(browser, { siteUrl, fileFor, query: 'notes.html' });
-  await page.getByRole('textbox', { name: 'notes.md', includeHidden: true }).waitFor({ state: 'attached' });
-  assert.equal(await page.locator('.notes-list > li').count(), notes?.items.length ?? 0);
-  if (notes) assert.equal(await page.locator('.note-problems, .notes-publish .problem').count(), 0, 'the notes as they are have nothing wrong with them');
-  assert.deepEqual(problems, []);
-  await close();
-});
-
-test('the page previews the notes being written in the notes helper', async () => {
-  const { page, problems, close } = await browse(browser, { siteUrl, fileFor, query: '?notes-draft' });
-  await page.locator('.preview-banner').waitFor();
-  await page.locator('.viewer').waitFor();
-  await page.waitForLoadState('networkidle');
-  assert.deepEqual(problems, []);
-  await close();
 });
 
 test('the settings helper opens with the site\'s settings, ready to copy', async () => {

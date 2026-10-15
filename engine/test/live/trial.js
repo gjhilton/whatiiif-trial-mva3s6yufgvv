@@ -1,5 +1,4 @@
-// Shared by the tests on real GitHub, which are run by hand, logged in with gh, before every release and after any
-// change to the workflows or what they run (about ten minutes):
+// Shared by the tests on real GitHub, which are run by hand, logged in with gh (about ten minutes):
 //
 //   npm run test:live
 //
@@ -42,8 +41,8 @@ export const git = (cwd, args, { lfs = false } = {}) =>
   exec('git', [...AS_ME, ...(lfs ? [] : NO_LFS), ...args], { cwd, env: { ...process.env, GIT_LFS_SKIP_SMUDGE: '1' }, maxBuffer: 64 * 1024 * 1024 });
 
 /**
- * Points a copy's workflows, which call the template's steps at the tag of its major version (v1 for 1.x, the last
- * release), at commit `sha` instead, so a trial runs the steps being tried. GitHub must have that commit.
+ * Points a copy's workflows, which call the template's steps at the v0 tag (the last release), at commit `sha`
+ * instead, so a trial runs the steps being tried. GitHub must have that commit.
  */
 async function callStepsAt(work, sha, upstream) {
   if ((await run('gh', ['api', `repos/${upstream}/commits/${sha}`, '--silent'])).code !== 0) {
@@ -52,7 +51,7 @@ async function callStepsAt(work, sha, upstream) {
   const dir = join(work, '.github/workflows');
   for (const file of await readdir(dir)) {
     const text = await readFile(join(dir, file), 'utf8');
-    await writeFile(join(dir, file), text.replace(/(uses: \S+\/\.github\/workflows\/[^@\s]+)@v\d+$/gm, `$1@${sha}`));
+    await writeFile(join(dir, file), text.replace(/(uses: \S+\/\.github\/workflows\/[^@\s]+)@v0$/gm, `$1@${sha}`));
   }
 }
 
@@ -95,18 +94,6 @@ export async function trialRepository(ref = 'HEAD') {
 
     /** The Deploy run GitHub started for a commit. */
     deployRunFor: (sha) => runFor('Deploy', sha),
-
-    /**
-     * What a Deploy run put at the top of its page, from its deploy job, as [level, title, message]. The job is
-     * "deploy" in a copy whose deploy.yml has the steps itself, as before 0.4.0, and "publish / deploy" in one whose
-     * deploy.yml calls publish.yml.
-     */
-    async deployAnnotations(id) {
-      const { jobs } = await ghJson('api', `repos/${repository}/actions/runs/${id}/jobs`);
-      const job = jobs.find(({ name }) => name === 'deploy' || name.endsWith(' / deploy'));
-      assert.ok(job, `run ${id} has no deploy job, only ${jobs.map(({ name }) => name).join(', ')}`);
-      return ghJson('api', `repos/${repository}/check-runs/${job.id}/annotations`, '--jq', '[.[] | [.annotation_level, .title, .message]]');
-    },
 
     /** A run once it has finished, on the given attempt (a re-run is attempt 2). */
     finished: (id, { attempt = 1, timeout = 15 * MINUTE } = {}) =>

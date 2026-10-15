@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Puts this commit of the template into a demo repository made from it, keeping the demo's own content/, and
-# waits for the demo's Deploy workflow to publish it to GitHub Pages. Prints the site's address last. The demo is as
-# a site made from the template now would be: its workflows call the steps at the tag they name (v1 for 1.x).
+# waits for the demo's Deploy workflow to publish it to GitHub Pages. Prints the site's address last.
 #
 #   engine/test/live/deploy-demo.sh OWNER/REPO
 #
-# Pushes over SSH (a deploy key with write access, in CI), or to DEMO_GIT_URL if set (as the tests do); reads the
-# demo's workflow runs with gh.
+# Pushes over SSH (a deploy key with write access, in CI); reads the demo's workflow runs with gh.
 set -euo pipefail
 
 demo=${1:?usage: deploy-demo.sh OWNER/REPO}
@@ -15,10 +13,13 @@ work=$(mktemp -d)
 # Git LFS stays out of it, so the demo's content/ goes back exactly as it is stored.
 nolfs=(-c filter.lfs.clean= -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false)
 
-git "${nolfs[@]}" clone -q "${DEMO_GIT_URL:-git@github.com:$demo.git}" "$work"
+git "${nolfs[@]}" clone -q "git@github.com:$demo.git" "$work"
 # Everything but content/ is replaced by this commit's, as "Use this template" would give it today.
 git -C "$work" rm -q -r -- . ':!content'
 git archive HEAD -- $(git ls-tree --name-only HEAD | grep -vx content) | tar -x -C "$work"
+# Its workflows call the template's steps at the v0 tag, the last release: here they call this commit's instead.
+sed -i.orig -E "s#(uses: [^ ]+/\.github/workflows/[^@ ]+)@v0\$#\1@$sha#" "$work"/.github/workflows/*.yml
+rm "$work"/.github/workflows/*.orig
 git -C "$work" "${nolfs[@]}" add -A
 
 if git -C "$work" diff --cached --quiet; then
@@ -43,17 +44,8 @@ else
       exit 1
     fi
     echo "Waiting for https://github.com/$demo/actions/runs/$run"
-    # gh run watch also gives up when the network cuts it off, though the run goes on: how the run ended decides,
-    # and a run not ended yet is watched again.
-    conclusion=
-    for _ in $(seq 1 5); do
-      gh run watch "$run" -R "$demo" --interval 10 > /dev/null || true
-      conclusion=$(gh run view "$run" -R "$demo" --json status,conclusion --jq 'if .status == "completed" then .conclusion else "" end' || true)
-      [[ -n "$conclusion" ]] && break
-      sleep 2 # gh run watch waits for the run itself: this only spaces out tries the network cut off at once
-    done
-    if [[ "$conclusion" != success ]]; then
-      echo "$demo's Deploy ${conclusion:+ended in }${conclusion:-could not be watched to its end}: https://github.com/$demo/actions/runs/$run" >&2
+    if ! gh run watch "$run" -R "$demo" --exit-status --interval 10 > /dev/null; then
+      echo "$demo's Deploy failed: https://github.com/$demo/actions/runs/$run" >&2
       exit 1
     fi
   fi

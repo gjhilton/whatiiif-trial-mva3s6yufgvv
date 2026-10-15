@@ -1,24 +1,14 @@
 # whatiiif: template only.
-# Main is production. Keeps everything outside this repository in step with it, and checks it on real GitHub, after
-# every push to main (whatever it changed), each release, and every day (GitHub itself changes too):
-# - demo: pushes the template to each demo repository, named by the DEMO_REPOSITORY variable (the plain demo) and
-#   NOTES_DEMO_REPOSITORY (the one with notes and a tour), whose own Deploy workflows publish it to GitHub Pages, then
-#   checks the live sites. Each is pushed to with a deploy key for it alone.
-# - screenshots: once both demos are up, remakes the README's screenshots of them on a Mac and commits any that look
-#   different to main.
-# - released: fails if the shared steps on main (publish.yml, offer-update.yml) are not those at the tag sites call
-#   them at (v1 for 1.x), which only a release moves: then sites do not have them, and a release is due.
-# The trials in new repositories made from the template (engine/test/live) are run by hand, with `npm run test:live`:
-# see DEVELOPING.md. Copies of the template have no DEMO_REPOSITORY, so this does nothing there.
+# Checks the template on real GitHub after each change: pushes it to each demo repository, named by the
+# DEMO_REPOSITORY variable (the plain demo) and NOTES_DEMO_REPOSITORY (the one with notes and a tour), whose own
+# Deploy workflows publish it to GitHub Pages, then checks the live sites. Each is pushed to with a deploy key for
+# it alone. Copies of the template have no DEMO_REPOSITORY, so this does nothing there.
 name: Live
 
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
-  schedule:
-    - cron: '23 4 * * *'
+    paths: ['engine/**', 'package*.json', '.github/workflows/deploy.yml', '.github/workflows/publish.yml', '.github/workflows/live.yml']
   workflow_dispatch:
 
 permissions:
@@ -66,60 +56,3 @@ jobs:
           node --test engine/test/e2e/check-site.js
         env:
           E2E_SITE_URL: ${{ steps.demo.outputs.url }}
-
-  released:
-    if: vars.DEMO_REPOSITORY != ''
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # and the tags
-      - name: Check that sites have the shared steps on main
-        run: |
-          major="v$(cut -d. -f1 engine/VERSION)"
-          if ! git rev-parse -q --verify "refs/tags/$major" > /dev/null; then
-            echo "::error title=No $major tag::Sites call the shared steps at $major, which no release has made yet: release."
-            exit 1
-          fi
-          ahead=$(git diff --name-only "$major" HEAD -- .github/workflows/publish.yml .github/workflows/offer-update.yml)
-          if [[ -n "$ahead" ]]; then
-            echo "::error title=Sites do not have the shared steps on main::$(echo $ahead) differs from $major, where sites call it: release, to move $major."
-            exit 1
-          fi
-          echo "Sites run the shared steps on main: they are those at $major."
-
-  screenshots:
-    needs: demo
-    if: vars.DEMO_REPOSITORY != ''
-    runs-on: macos-15 # the README's screenshots are a Mac's, as most people reading it will see the page
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: engine/.node-version
-          cache: npm
-      - name: Remake the README's screenshots of the demos
-        run: |
-          npm ci
-          npx playwright install chromium-headless-shell
-          node engine/test/support/readme-screenshots.js
-        env:
-          GH_TOKEN: ${{ github.token }} # to list the demos' content/
-      - name: Commit any that look different
-        run: |
-          git add engine/artwork
-          if git diff --cached --quiet; then
-            echo "The README's screenshots are up to date."
-            exit 0
-          fi
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "README screenshots, remade from the demos at ${GITHUB_SHA::7}"
-          # main may have moved on while this ran; the screenshots are the only change, so they go on top of it.
-          for attempt in 1 2 3; do
-            git fetch -q origin main && git rebase -q origin/main && git push -q origin HEAD:main && exit 0
-            sleep 10
-          done
-          echo "::error title=The README's screenshots were not committed::main kept moving; run Live again."
-          exit 1
