@@ -1,6 +1,7 @@
 // A picture too big to upload into content/, put in a GitHub release and named by its link in whatiiif.toml, as the
 // README's "Large pictures" says, on real GitHub: in a public repository made from the template and holding this
-// commit of it. Run by hand with `npm run test:live` (see trial.js).
+// commit of it. Run by the Live workflow, or by hand with
+// `npm run test:live` (see trial.js).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { stat, writeFile } from 'node:fs/promises';

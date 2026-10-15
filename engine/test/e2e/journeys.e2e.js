@@ -10,9 +10,11 @@ import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { missingFiles } from '../../lib/service.js';
 import { parseConfig } from '../../lib/config.js';
+import { readNotesSource } from '../../lib/notes.js';
 import { inspect, makeImage, makePhonePhoto, makeVariant } from '../support/fixtures.js';
 import { schemaProblems, schemaUnavailable } from '../support/schema.js';
 import { browse, commit, deploy, git, run, templateCopy, until, zoomToFullResolution } from '../support/harness.js';
+import { tempDir } from '../support/tmp.js';
 
 const json = async (path) => JSON.parse(await readFile(path, 'utf8'));
 const exists = (path) => access(path).then(() => true, () => false);
@@ -376,6 +378,15 @@ suite('a photographer uploads a phone photo on github.com and fills in every set
     await opened.close();
   });
 
+  test('the manifest opens in Mirador and Universal Viewer at their own projects’ addresses', async () => {
+    const { page, close } = await open(site);
+    const manifest = encodeURIComponent(`${site.baseUrl}/iiif/manifest.json`);
+    assert.equal(await page.getByRole('link', { name: 'Open in Mirador' }).getAttribute('href'), `https://projectmirador.org/embed/?iiif-content=${manifest}`);
+    // Universal Viewer's own, which universalviewer.io/uv.html leads to, rather than a host for trying out its versions.
+    assert.equal(await page.getByRole('link', { name: 'Open in Universal Viewer' }).getAttribute('href'), `https://universalviewer.dev/uv.html#?manifest=${manifest}`);
+    await close();
+  });
+
   test('a visitor can switch to Mirador, and the address then remembers the choice', async () => {
     const opened = await open(site);
     await opened.page.getByRole('button', { name: 'Mirador' }).click();
@@ -530,6 +541,26 @@ suite('a visitor shares the part of the picture they have zoomed into', () => {
     });
   }
 
+  for (const viewer of ['openseadragon', 'mirador']) {
+    test(`in ${viewer}, keys do not turn or mirror the picture, so a link to the view still names what is on screen`, async () => {
+      const { page, problems, close } = await open(site, `?viewer=${viewer}#xywh=2000,1500,500,400`);
+      const canvas = page.locator(viewer === 'mirador' ? '.mirador-window .openseadragon-canvas' : '.openseadragon-canvas').first();
+      await canvas.waitFor();
+      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(5000); // settled, and the outline of the region faded away (in OpenSeadragon)
+      const pane = page.locator('.viewer');
+      await canvas.focus(); // first, so its focus ring is in both pictures of it
+      await page.waitForTimeout(500);
+      const [before, address] = [await pane.screenshot(), page.url()];
+      for (const key of ['r', 'R', 'f']) await page.keyboard.press(key);
+      await page.waitForTimeout(1500);
+      assert.equal(page.url(), address, 'the address still names the same part');
+      assert.ok(before.equals(await pane.screenshot()), 'the picture as it was');
+      assert.deepEqual(problems, []);
+      await close();
+    });
+  }
+
   test('a link to a region outlines that region for a moment, so whoever opens it sees what was meant', async () => {
     const { page, close } = await open(site, '?viewer=openseadragon#xywh=2000,1500,500,400');
     const outline = page.locator('.region-outline');
@@ -604,6 +635,7 @@ suite('a visitor shares the part of the picture they have zoomed into', () => {
 
 suite('a museum adds notes to its picture, which make a tour', () => {
   let site;
+  let source; // notes.md as written
   const notes = [
     ['The lighthouse', '600,300,400,700'],
     ['The boats', '2400,1800,900,500'],
@@ -619,7 +651,8 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     const repo = await templateCopy();
     await copyFile(await makeImage(4000, 3000), join(repo, 'content/harbour.tif'));
     const text = notes.map(([title, region]) => `## [${title}](https://example.github.io/my-image/?viewer=openseadragon#xywh=${region})\n\nAbout ${title.toLowerCase()}.\n`);
-    await writeFile(join(repo, 'content/notes.md'), `Three things to look for.\n\n${text.join('\n')}`);
+    source = `Three things to look for.\n\n${text.join('\n')}`;
+    await writeFile(join(repo, 'content/notes.md'), source);
     await commit(repo, 'A picture with notes');
     site = await deploy(repo);
     assert.equal(site.built, true, site.log);
@@ -724,6 +757,23 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     await close();
   });
 
+  test('from the keyboard, the picture’s own buttons come before the numbers of the notes on it, as they do on screen', async () => {
+    const { page, close } = await open(site, '?viewer=openseadragon');
+    await page.locator('.note-marker').first().waitFor();
+    await page.getByRole('button', { name: 'Mirador' }).focus(); // the last thing before the picture
+    const order = [];
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('Tab');
+      order.push(await page.evaluate(() => document.activeElement.getAttribute('aria-label') ?? document.activeElement.className));
+    }
+    assert.deepEqual(order.slice(0, 4), ['Zoom in', 'Zoom out', 'Show the whole picture', 'Full screen']);
+    assert.ok(order.indexOf('Note 1') > 3, order.join(', '));
+    // And still drawn over the picture, where they can be pressed.
+    const zoomIn = await page.getByRole('button', { name: 'Zoom in' }).boundingBox();
+    assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label'), { x: zoomIn.x + zoomIn.width / 2, y: zoomIn.y + zoomIn.height / 2 }), 'Zoom in');
+    await close();
+  });
+
   test('the tour takes keyboard focus when it starts, and gives it back when it ends', async () => {
     const { page, close } = await open(site, '?viewer=openseadragon');
     await page.locator('.openseadragon-container').first().waitFor();
@@ -738,6 +788,453 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     await page.keyboard.press('Escape');
     assert.equal(await tour.count(), 0);
     assert.equal(await start.evaluate((element) => element === document.activeElement), true, 'focus goes back to Take the tour');
+    await close();
+  });
+
+  // The notes helper (notes.html), which writes the notes files for the site's owner.
+  const helper = async (on = site, options = {}) => {
+    const opened = await open(on, 'notes.html', { device: { reducedMotion: 'reduce' }, ...options }); // so the page scrolls at once
+    const { page } = opened;
+    await page.locator('.openseadragon-canvas').first().waitFor();
+    await page.waitForLoadState('networkidle');
+    const file = (name = 'notes.md') => page.getByRole('textbox', { name, includeHidden: true });
+    /** A note's line in the list, which opens it. */
+    const note = (n) => page.getByRole('button', { name: new RegExp(`^Note ${n}: `) });
+    return { ...opened, file, note, written: async (name) => readNotesSource(await file(name).inputValue()) };
+  };
+  const near = (region, [x, y, w, h], slack = 20) =>
+    Math.abs(region.x - x) <= slack && Math.abs(region.y - y) <= slack && Math.abs(region.w - w) <= slack && Math.abs(region.h - h) <= slack;
+  /** Waits for `locator` to stop moving, as the picture does once it has got where it was sent. */
+  const settled = async (locator) => {
+    let last;
+    await until(async () => {
+      const now = JSON.stringify(await locator.boundingBox());
+      const still = now === last;
+      last = now;
+      return still;
+    }, 'the picture to settle');
+    return JSON.parse(last);
+  };
+  const drag = async (page, from, by) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + by.x / 2, from.y + by.y / 2, { steps: 5 });
+    await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
+    await page.mouse.up();
+  };
+  const middle = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+
+  test('the notes helper starts from the notes as written, and writes what reads back as the same notes', async () => {
+    const { page, problems, close, written, note } = await helper();
+    assert.deepEqual(await written(), readNotesSource(source));
+    assert.equal(await page.locator('.note-area').count(), 3, 'each note’s part is outlined on the picture');
+    assert.deepEqual(await page.locator('.notes-list .note-row-title').allTextContents(), notes.map(([title], i) => `Note ${i + 1}: ${title}`));
+    await page.getByText('3 notes, as on your site.').waitFor();
+    await page.getByText('These are the notes your site has.').waitFor();
+    assert.equal(await page.locator('.note-problems, .notes-publish .problem').count(), 0);
+
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse at dusk');
+    await page.getByText('3 notes. Changed, and not yet on your site: this browser keeps the changes until then.').waitFor();
+    // Changes can be let go of at once, without a reload first.
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Start again from your site’s notes' }).click();
+    assert.deepEqual(await written(), readNotesSource(source));
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse at dusk');
+    assert.equal(await page.getByRole('link', { name: 'Open notes.md on GitHub' }).getAttribute('href'), 'https://github.com/example/my-image/edit/main/content/notes.md');
+    assert.deepEqual(problems, []);
+    await close();
+  });
+
+  test('in the notes helper a note opened from the list leaves the picture until shown, and a number chosen on the picture opens its note', async () => {
+    const { page, problems, close, note } = await helper();
+    const pane = await page.locator('.notes-picture .viewer').boundingBox();
+    await note(2).click();
+    const where = await settled(page.locator('.note-area[data-selected]'));
+    assert.ok(where.width < pane.width / 2, `the picture stays where it was, so a part found there can be used for the note: ${JSON.stringify(where)}`);
+    assert.equal(await page.locator('.note-handle').count(), 4, 'the open note’s part has a corner to drag at each corner');
+    assert.equal(await page.getByRole('group', { name: 'Note 2' }).count(), 0, 'beside the picture, the note’s own buttons are enough');
+    await page.getByRole('button', { name: 'Show note 2' }).click();
+    const boats = await settled(page.locator('.note-area[data-selected]'));
+    assert.ok(boats.width > pane.width / 2, `shown, the picture moves to the boats, which fill most of it: ${JSON.stringify(boats)}`);
+
+    // A note opened below the open one stays in view as the one above it closes.
+    await note(3).click();
+    const row = await note(3).boundingBox();
+    assert.ok(row.y >= 0 && row.y + row.height <= 900, `note 3’s line is on screen: ${JSON.stringify(row)}`);
+    await note(3).click();
+
+    await page.getByRole('button', { name: 'Show the whole picture' }).click();
+    await settled(page.locator('.note-area').first());
+    await page.getByRole('button', { name: 'Note 3', exact: true }).click();
+    assert.equal(await note(3).getAttribute('aria-expanded'), 'true');
+    assert.equal(await note(3).evaluate((button) => button === document.activeElement), true, 'its line in the list has keyboard focus');
+    assert.equal(await page.getByRole('textbox', { name: 'Title', exact: true }).inputValue(), 'A gull');
+    assert.deepEqual(problems, []);
+    await close();
+  });
+
+  test('in the notes helper a note’s part is the part in view, one drawn round, or its outline dragged on the picture', async () => {
+    const { page, problems, close, written, note } = await helper();
+    // The whole picture in view: once it has settled there, that is the part.
+    await note(1).click();
+    await page.getByRole('button', { name: 'Show the whole picture' }).click();
+    await until(async () => {
+      await page.getByRole('button', { name: 'Use the part in view for note 1' }).click();
+      return near((await written()).items[0].region, [0, 0, 4000, 3000], 0);
+    }, 'the whole picture to be the part of note 1');
+    await page.getByText(/^The whole picture\. To point at a part of it, zoom in/).waitFor(); // most likely a slip
+
+    // Drawn round the boats, outlined on the picture as note 2's part, it is the boats.
+    await page.getByRole('button', { name: 'Draw it: note 1' }).click();
+    const boats = await settled(page.locator('.note-area').nth(1));
+    assert.equal(JSON.stringify(boats), JSON.stringify(await page.locator('.note-area').nth(1).boundingBox()), 'the picture holds still to be drawn on');
+    await drag(page, { x: boats.x, y: boats.y }, { x: boats.width, y: boats.height });
+    const drawn = (await written()).items[0].region;
+    assert.ok(near(drawn, at(notes[1][1])), `drawn round the boats: ${JSON.stringify(drawn)}`);
+    assert.equal(await page.getByRole('button', { name: 'Stop drawing' }).count(), 0, 'one drag draws one part');
+
+    // While drawing, the picture still zooms; Escape stops drawing, and nothing is drawn.
+    await page.getByRole('button', { name: 'Draw it: note 1' }).click();
+    const outline = page.locator('.note-area').nth(2);
+    const before = await settled(outline);
+    await page.mouse.move(...Object.values(middle(await page.locator('.notes-picture .viewer').boundingBox())));
+    await page.mouse.wheel(0, -400);
+    const after = await settled(outline);
+    assert.ok(after.width > before.width * 1.1, `zoomed in while drawing: ${before.width} to ${after.width}`); // a step of the wheel is 1.2 times
+    await page.keyboard.press('Escape');
+    assert.equal(await page.getByRole('button', { name: 'Stop drawing' }).count(), 0);
+    assert.deepEqual((await written()).items[0].region, drawn);
+    // A tap while drawing, or a press that wanders a pixel or two, draws nothing: on a picture shown small, a pixel
+    // on screen is many of the picture's, and a speck would take the place of the note's part.
+    await page.getByRole('button', { name: 'Draw it: note 1' }).click();
+    const pane = middle(await page.locator('.notes-picture .viewer').boundingBox());
+    await drag(page, pane, { x: 2, y: 1 });
+    assert.equal(await page.getByRole('button', { name: 'Stop drawing' }).count(), 1, 'still drawing');
+    await page.keyboard.press('Escape');
+    assert.deepEqual((await written()).items[0].region, drawn);
+    // The picture is not turned or mirrored by OpenSeadragon's keys: parts are marked on it as it is.
+    const shape = async () => {
+      const { width, height } = await settled(page.locator('.note-area').nth(1));
+      return width > height;
+    };
+    const wide = await shape();
+    await page.locator('.notes-picture .openseadragon-canvas').first().focus();
+    await page.keyboard.press('r');
+    assert.equal(await shape(), wide, 'not turned');
+
+    // The open note's part, dragged by a corner, changes size; dragged by its number, it moves.
+    await note(2).click();
+    await page.getByRole('button', { name: 'Show note 2' }).click();
+    const area = await settled(page.locator('.note-area[data-selected]'));
+    const scale = 900 / area.width; // the picture's pixels to the screen's
+    await drag(page, middle(await page.locator('.note-handle[data-corner="se"]').boundingBox()), { x: 60, y: 40 });
+    const [x, y, w, h] = at(notes[1][1]);
+    const grown = (await written()).items[1].region;
+    assert.ok(near(grown, [x, y, w + 60 * scale, h + 40 * scale], 8 * scale), `grown at one corner: ${JSON.stringify(grown)}`);
+    await drag(page, middle(await page.locator('.note-area[data-selected] .note-marker').boundingBox()), { x: -50, y: -30 });
+    const moved = (await written()).items[1].region;
+    assert.ok(near(moved, [grown.x - 50 * scale, grown.y - 30 * scale, grown.w, grown.h], 8 * scale), `moved by its number: ${JSON.stringify(moved)}`);
+    assert.deepEqual([moved.w, moved.h], [grown.w, grown.h], 'moving keeps its size');
+    assert.equal(await note(2).getAttribute('aria-expanded'), 'true', 'a drag of the number is not a press of it');
+
+    // A tap on another note's number that wanders a little opens that note, and moves nothing.
+    const gull = (await written()).items[2].region;
+    await page.getByRole('button', { name: 'Show the whole picture' }).click();
+    const number = await settled(page.locator('.note-area').nth(2).locator('.note-marker'));
+    await drag(page, middle(number), { x: 6, y: 3 });
+    assert.equal(await note(3).getAttribute('aria-expanded'), 'true');
+    assert.deepEqual((await written()).items[2].region, gull);
+
+    // Drawing a new note's part: the button pressed becomes Stop drawing, keeping keyboard focus, and the hint, read out
+    // as it changes, says what to do.
+    const focused = () => page.evaluate(() => document.activeElement.textContent);
+    await page.getByRole('button', { name: 'Draw a new note’s part' }).press('Enter');
+    assert.equal(await focused(), 'Stop drawing');
+    assert.match(await page.getByRole('status').filter({ hasText: /^Drag across the picture/ }).textContent(), /round the part for a new note/);
+    await page.keyboard.press('Enter');
+    assert.equal(await focused(), 'Draw a new note’s part');
+
+    // A new note for the part in view, its title typed straight away.
+    await page.getByRole('button', { name: 'Add a note for the part in view' }).click();
+    await page.keyboard.type('The harbour');
+    const { items } = await written();
+    assert.equal(items.length, 4);
+    assert.equal(items[3].title, 'The harbour');
+    assert.ok(items[3].region, 'the part in view');
+    assert.deepEqual(problems, []);
+    await close();
+  });
+
+  test('on a narrow screen, the open note’s part is changed from under the picture, where the note’s own buttons are out of sight', async () => {
+    const { page, problems, close, written, note } = await helper(site, { device: { viewport: { width: 600, height: 900 }, reducedMotion: 'reduce' } });
+    await note(2).click();
+    await page.getByRole('button', { name: 'Show note 2' }).click();
+    const picture = await page.locator('.notes-picture').boundingBox();
+    assert.ok(picture.y >= -1 && picture.y + picture.height <= 901, `the picture and what is under it are on screen: ${JSON.stringify(picture)}`);
+    const here = page.getByRole('group', { name: 'Note 2' });
+    await page.getByRole('button', { name: 'Show the whole picture' }).click();
+    await until(async () => {
+      await here.getByRole('button', { name: 'Use the part in view' }).click();
+      return near((await written()).items[1].region, [0, 0, 4000, 3000], 0);
+    }, 'the whole picture to be the part of note 2');
+    // A number chosen on the picture opens its note there, rather than scrolling away to the list, and keeps focus.
+    await page.getByRole('button', { name: 'Note 3', exact: true }).press('Enter');
+    await page.getByRole('group', { name: 'Note 3' }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Note 3');
+    // Its Draw button there becomes Stop drawing as it is pressed, keeping focus.
+    await page.getByRole('group', { name: 'Note 3' }).getByRole('button', { name: 'Draw it again' }).press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Stop drawing');
+    await page.keyboard.press('Enter');
+    const still = await page.locator('.notes-picture').boundingBox();
+    assert.ok(still.y >= -1 && still.y + still.height <= 901, `the picture is still on screen: ${JSON.stringify(still)}`);
+    assert.deepEqual(problems, []);
+    await close();
+  });
+
+  test('in the notes helper notes can be put in another order, removed and put back, and a mistake is explained where it is', async () => {
+    const { page, close, written, note } = await helper();
+    const titles = async () => (await written()).items.map(({ title }) => title);
+    await page.getByRole('button', { name: 'Move note 3 up' }).click();
+    assert.deepEqual(await titles(), ['The lighthouse', 'A gull', 'The boats']);
+    // From the keyboard, focus stays with the note moved, down and up, at the bottom and the top.
+    const label = () => page.evaluate(() => document.activeElement.getAttribute('aria-label'));
+    await page.getByRole('button', { name: 'Move note 1 down' }).press('Enter');
+    assert.equal(await label(), 'Move note 2 down');
+    await page.keyboard.press('Enter');
+    assert.deepEqual([await titles(), await label()], [['A gull', 'The boats', 'The lighthouse'], 'Move note 3 up']);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    assert.deepEqual([await titles(), await label()], [['The lighthouse', 'A gull', 'The boats'], 'Move note 1 down']);
+    // A key held down moves the note once, not on and back again as focus turns at the bottom.
+    await page.getByRole('button', { name: 'Move note 2 down' }).focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.down('Enter'); // the first a press, the rest the key repeating
+    await page.keyboard.up('Enter');
+    assert.deepEqual(await titles(), ['The lighthouse', 'The boats', 'A gull']);
+    await page.getByRole('button', { name: 'Move note 3 up' }).click();
+    assert.deepEqual(await titles(), ['The lighthouse', 'A gull', 'The boats']);
+    await note(1).click();
+    await page.getByRole('button', { name: 'Draw it: note 1' }).click();
+    const focused = () => page.evaluate(() => document.activeElement.textContent);
+    await page.getByRole('button', { name: 'Remove note 1' }).press('Enter');
+    assert.equal(await page.getByRole('button', { name: 'Stop drawing' }).count(), 0, 'a note removed while its part was being drawn stops the drawing');
+    assert.deepEqual(await titles(), ['A gull', 'The boats']);
+    assert.equal(await focused(), 'Undo', 'keyboard focus goes from the button that went with the note to Undo');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await titles(), ['The lighthouse', 'A gull', 'The boats']);
+    assert.equal(await note(1).getAttribute('aria-expanded'), 'true', 'put back, and open again');
+    assert.equal(await note(1).evaluate((button) => button === document.activeElement), true, 'with keyboard focus');
+
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('');
+    await page.getByRole('textbox', { name: 'Text', exact: true }).fill('## Its lamp\n\nBright.');
+    await note(2).click(); // a note's mistakes are pointed out once the owner moves on from it
+    const said = ['Note 1 needs a title.', 'Note 1 has a heading made with ##, which would start a note of its own: use ### for a heading within a note.'];
+    assert.deepEqual(await page.locator('.notes-list .note-problems li').allTextContents(), said);
+    assert.equal(await page.getByRole('button', { name: /^Copy/ }).count(), 0, 'nothing to copy that would stop the site being built');
+    await page.locator('.notes-publish').getByRole('button', { name: 'Note 1 needs a title.' }).click();
+    assert.equal(await note(1).getAttribute('aria-expanded'), 'true', 'each mistake opens its note');
+    await close();
+  });
+
+  test('the notes helper keeps changes in the browser until the site has them, and previews them on the site’s page', async () => {
+    const { page, close, written, note } = await helper();
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse at dusk');
+    await page.reload(); // at once: kept as the page is left
+    await page.getByText(/^These are the changes you made in this browser on /).waitFor();
+    assert.equal((await written()).items[0].title, 'The lighthouse at dusk', 'a reload loses nothing');
+    const kept = () => page.evaluate(() => JSON.parse(localStorage.getItem('whatiiif notes: https://example.github.io/my-image/')).saved);
+    const made = await kept();
+    await page.reload();
+    await page.getByText(/^These are the changes you made in this browser on /).waitFor();
+    await page.waitForTimeout(500);
+    assert.equal(await kept(), made, 'still kept as made when they were made, not when they were last looked at');
+
+    // The preview: the site's own page, with these notes and their tour.
+    const [preview] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('link', { name: 'Preview them on your site' }).click()]);
+    await preview.locator('.notes').waitFor();
+    assert.match(await preview.locator('.preview-banner').textContent(), /^A preview of the notes you are writing, which are not on your site yet/);
+    assert.deepEqual(await preview.locator('.notes li h3').allTextContents(), ['The lighthouse at dusk', 'The boats', 'A gull']);
+    assert.equal(await preview.getByRole('button', { name: 'Mirador' }).count(), 0, 'no Mirador, which lists the notes the site has, not these');
+    await preview.getByRole('button', { name: 'Take the tour' }).click();
+    assert.equal(await preview.getByRole('region', { name: 'Tour' }).locator('h2').textContent(), 'The lighthouse at dusk');
+    await preview.evaluate(() => dispatchEvent(new Event('focus')));
+    assert.equal(await preview.getByRole('region', { name: 'Tour' }).count(), 1, 'come back to with nothing changed, the preview is left as it was, tour and all');
+    // Changed again in the helper, the preview shows the change when the owner comes back to it.
+    await note(3).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Two gulls');
+    const comeBack = () => preview.evaluate(() => dispatchEvent(new Event('focus'))); // as the owner switches to it
+    await until(async () => {
+      await comeBack();
+      return (await preview.locator('.notes li h3').allTextContents()).includes('Two gulls');
+    }, 'the preview to show the change');
+    // Notes the build could not read are not shown as no notes at all: the preview says why.
+    await page.getByRole('textbox', { name: 'Text', exact: true }).fill('## Wings');
+    const banner = preview.locator('.preview-banner');
+    await until(async () => {
+      await comeBack();
+      return /^The notes you are writing cannot be shown yet: Note 3 has a heading made with ##/.test(await banner.textContent());
+    }, 'the preview to say why');
+    await page.getByRole('textbox', { name: 'Text', exact: true }).fill('');
+
+    // Back to the helper closes the preview, rather than opening a second helper in it.
+    await Promise.all([preview.waitForEvent('close'), preview.getByRole('link', { name: 'Back to the notes helper' }).click()]);
+
+    // Starting again while a part is being drawn stops the drawing, which was for a note now gone.
+    await page.getByRole('button', { name: 'Draw a new note’s part' }).click();
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Start again from your site’s notes' }).click();
+    assert.deepEqual(await written(), readNotesSource(source));
+    assert.equal(await page.getByRole('button', { name: 'Stop drawing' }).count(), 0);
+    await close();
+  });
+
+  test('changes kept in the browser are said to undo any made to the site’s notes since they began, on GitHub perhaps', async () => {
+    const elsewhere = join(await tempDir('changed'), 'settings.json');
+    let changedOnGitHub = false;
+    const { page, close, note } = await helper(site, { fileFor: (path) => (changedOnGitHub && path === 'settings.json' ? elsewhere : join(site.dist, path)) });
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse at dusk');
+    await page.waitForTimeout(500); // kept a moment after the change
+    const settings = await json(join(site.dist, 'settings.json'));
+    await writeFile(elsewhere, JSON.stringify({ ...settings, notes: { ...settings.notes, text: settings.notes.text.replace('A gull', 'Two gulls') } }));
+    changedOnGitHub = true;
+    const warning = page.getByText(/^Your site’s notes have changed since then, perhaps on GitHub/);
+    await page.reload();
+    await warning.waitFor();
+    // Changed again, the changes still began from the notes the site had before.
+    await note(2).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The fleet');
+    await page.waitForTimeout(500);
+    await page.reload();
+    await warning.waitFor();
+    // Changed back to what the site has, there is nothing kept to warn of.
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse');
+    await note(2).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The boats');
+    await note(3).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Two gulls');
+    await page.getByText('3 notes, as on your site.').waitFor();
+    assert.equal(await warning.count(), 0);
+    await close();
+  });
+
+  test('a second notes helper on the same site waits for the first to be closed, then carries on from its changes', async () => {
+    const { page, close, note } = await helper();
+    await note(1).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The lighthouse at dusk');
+    const other = await page.context().newPage();
+    await other.goto(page.url());
+    await other.getByText(/^The notes helper for this site is open in another tab or window\. Carry on there/).waitFor();
+    assert.equal(await other.getByRole('textbox').count(), 0, 'nothing to change in it meanwhile, to be kept over the first one’s changes');
+    await page.close();
+    await other.getByText(/^These are the changes you made in this browser on /).waitFor();
+    assert.equal(await other.locator('.notes-list .note-row-title').first().textContent(), 'Note 1: The lighthouse at dusk');
+    await close();
+  });
+
+  test('notes copied by hand from the helper’s box are watched for too, as where the browser would not copy them', async () => {
+    const { page, close, note } = await helper();
+    await note(2).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The fleet');
+    // A page not served securely has no clipboard: the helper says how to copy it by hand.
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { value: undefined }));
+    await page.getByRole('button', { name: 'Copy notes.md' }).click();
+    await page.getByText(/Your browser would not copy it: open See notes\.md, below, and copy everything in it\./).waitFor();
+    await page.locator('summary', { hasText: 'See notes.md' }).click();
+    await page.getByRole('textbox', { name: 'notes.md' }).focus();
+    await page.keyboard.press('ControlOrMeta+C');
+    await page.getByText('Watching for your site to have them…').waitFor();
+    await close();
+  });
+
+  test('once its notes are copied, the notes helper watches for the site to have them, then forgets the changes', async () => {
+    const rebuilt = join(await tempDir('rebuilt'), 'settings.json');
+    let built = false;
+    const { page, close, file, note } = await helper(site, { fileFor: (path) => (built && path === 'settings.json' ? rebuilt : join(site.dist, path)) });
+    await note(2).click();
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('The fleet');
+    await page.getByRole('button', { name: 'Copy notes.md' }).click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), await file().inputValue());
+    await page.getByText('Watching for your site to have them…').waitFor();
+    const github = page.getByRole('link', { name: 'Open notes.md on GitHub' });
+    assert.deepEqual([await github.getAttribute('target'), await github.getAttribute('rel')], ['_blank', 'noopener'], 'GitHub in a tab of its own, so this one goes on watching');
+    await page.waitForTimeout(500);
+    await page.reload(); // even so, the owner may come back to it later
+    await page.getByText('Watching for your site to have them…').waitFor();
+
+    // The owner pastes them into notes.md on GitHub, and the site is rebuilt with them.
+    const settings = await json(join(site.dist, 'settings.json'));
+    await writeFile(rebuilt, JSON.stringify({ ...settings, notes: { ...settings.notes, text: await file().inputValue() } }));
+    built = true;
+    await page.getByText('Your site has these notes now.').waitFor({ timeout: 30_000 });
+    await page.getByText('3 notes, as on your site.').waitFor();
+    const kept = () => page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('whatiiif notes')));
+    await until(async () => (await kept()).length === 0, 'the changes to be forgotten, as the site has them');
+    await close();
+  });
+
+  test('in the notes helper notes in other languages move with their notes, and files changed together go on the site together', async () => {
+    const repo = await templateCopy();
+    await copyFile(await makeImage(4000, 3000), join(repo, 'content/harbour.tif'));
+    await writeFile(join(repo, 'content/notes.md'), source);
+    await writeFile(join(repo, 'content/notes.cy.md'), 'Tri pheth.\n\n## Y goleudy\n\nAm y goleudy.\n\n## Y cychod\n\n## Gwylan\n');
+    await commit(repo, 'Notes in Welsh too');
+    const welsh = await deploy(repo);
+    assert.equal(welsh.built, true, welsh.log);
+    const { page, problems, close, written, note } = await helper(welsh);
+    await page.getByRole('button', { name: 'Move note 3 up' }).click();
+    const [en, cy] = [await written('notes.md'), await written('notes.cy.md')];
+    assert.deepEqual(en.items.map(({ title }) => title), ['The lighthouse', 'A gull', 'The boats']);
+    assert.deepEqual(cy.items.map(({ title }) => title), ['Y goleudy', 'Gwylan', 'Y cychod']);
+    assert.equal(cy.items[0].text, 'Am y goleudy.');
+
+    await note(1).click();
+    const welshTitle = page.getByRole('textbox', { name: 'Title in Welsh' });
+    assert.equal(await welshTitle.inputValue(), 'Y goleudy');
+    await welshTitle.fill('');
+    await note(2).click();
+    await page.locator('.notes-publish').getByRole('button', { name: 'Note 1 needs a title in Welsh, for notes.cy.md.' }).waitFor();
+    await note(1).click();
+    await welshTitle.fill('Y goleudy');
+
+    assert.equal(await page.getByRole('link', { name: 'Upload them to your content folder on GitHub' }).getAttribute('href'), 'https://github.com/example/my-image/upload/main/content');
+    const downloads = [];
+    page.on('download', (download) => downloads.push(download));
+    for (const name of ['notes.md', 'notes.cy.md']) await page.getByRole('button', { name: `Download ${name}` }).click(); // one a press, as browsers ask before several
+    await until(() => downloads.length === 2, 'both files to download');
+    assert.deepEqual(downloads.map((download) => download.suggestedFilename()), ['notes.md', 'notes.cy.md']);
+    assert.deepEqual(problems, []);
+    await close();
+  });
+
+  test('a notes helper that cannot load the site’s notes says so, rather than taking the site for one with none', async () => {
+    const { page, close } = await helper();
+    await page.route('**/settings.json*', (route) => route.fulfill({ status: 503, body: 'Unavailable' }));
+    await page.reload();
+    await page.getByText(/^This page could not load your site’s details and notes\. Reload it to try again/).waitFor();
+    assert.equal(await page.getByText('No notes yet.').count(), 0);
+    await close();
+  });
+
+  test('on a site with no notes yet, the notes helper says what notes are, starts empty, and links to where notes.md is made', async () => {
+    const plain = await deploy(await templateCopy().then(async (repo) => {
+      await copyFile(await makeImage(800, 600), join(repo, 'content/plain.tif'));
+      await commit(repo, 'A picture');
+      return repo;
+    }));
+    const { page, problems, close, written, file } = await helper(plain);
+    assert.deepEqual(await written(), { intro: '', items: [] });
+    await page.getByText(/^Notes point out parts of your picture\./).waitFor();
+    await page.getByText('No notes yet.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: 'Preview them on your site' }).count(), 0, 'nothing to preview yet');
+    await page.getByRole('button', { name: 'Add a note for the part in view' }).click();
+    await page.keyboard.type('The middle');
+    assert.equal(await page.getByRole('link', { name: 'Make content/notes.md on GitHub' }).getAttribute('href'), 'https://github.com/example/my-image/new/main?filename=content/notes.md');
+    assert.match(await file().inputValue(), /^## \[The middle\]\(https:\/\/example\.github\.io\/my-image\/#xywh=0,0,800,600\)$/m);
+    assert.deepEqual(problems, []);
     await close();
   });
 

@@ -3,7 +3,7 @@
 // run in Chromium.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { devices, webkit } from 'playwright';
 import { makeImage } from '../support/fixtures.js';
@@ -97,6 +97,56 @@ test('on an iPhone, the settings helper works', async () => {
   await title.fill('Harbour at night');
   assert.match(await page.getByRole('textbox', { name: 'whatiiif.toml' }).inputValue(), /^title = "Harbour at night"$/m);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scrolling');
+  assert.deepEqual(problems, []);
+  await close();
+});
+
+test('on an iPhone, the notes helper adds a note for the part of the picture on screen', async () => {
+  const { page, problems, close } = await open('notes.html', { device: devices['iPhone 15'] });
+  const file = page.getByRole('textbox', { name: 'notes.md', includeHidden: true });
+  await file.waitFor({ state: 'attached' });
+  await page.locator('.openseadragon-canvas').first().waitFor();
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'Add a note for the part in view' }).tap();
+  await page.getByRole('textbox', { name: 'Title' }).fill('The whole harbour');
+  await page.getByRole('button', { name: 'Copy notes.md' }).waitFor();
+  assert.match(await file.inputValue(), /^## \[The whole harbour\]\(.*#xywh=\d+,\d+,\d+,\d+\)$/m);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scrolling');
+  assert.deepEqual(problems, []);
+  await close();
+});
+
+test('in Safari, the notes helper previews its notes on the site’s page, and the preview closes back to it', async () => {
+  const { page, problems, close } = await open('notes.html');
+  await page.locator('.openseadragon-canvas').first().waitFor();
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'Add a note for the part in view' }).click();
+  await page.keyboard.type('The whole harbour');
+  const [preview] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('link', { name: 'Preview them on your site' }).click()]);
+  await preview.locator('.notes').waitFor();
+  assert.deepEqual(await preview.locator('.notes li h3').allTextContents(), ['The whole harbour']);
+  await Promise.all([preview.waitForEvent('close'), preview.getByRole('link', { name: 'Back to the notes helper' }).click()]);
+  assert.deepEqual(problems, []);
+  await close();
+});
+
+test('in Safari, notes files changed together download one a press, under their own names', async () => {
+  const repo = await templateCopy();
+  await copyFile(await makeImage(800, 600), join(repo, 'content/harbour.tif'));
+  await writeFile(join(repo, 'content/notes.md'), '## [The middle](#xywh=200,150,400,300)\n\n## [A corner](#xywh=0,0,100,100)\n');
+  await writeFile(join(repo, 'content/notes.cy.md'), '## Y canol\n\n## Cornel\n');
+  await commit(repo, 'Notes in two languages');
+  const welsh = await deploy(repo);
+  assert.equal(welsh.built, true, welsh.log);
+  const { page, problems, close } = await browse(browser, { siteUrl: welsh.baseUrl, query: 'notes.html', fileFor: (path) => join(welsh.dist, path) });
+  await page.locator('.openseadragon-canvas').first().waitFor();
+  await page.getByRole('button', { name: 'Move note 2 up' }).click();
+  const downloads = [];
+  page.on('download', (download) => downloads.push(download));
+  for (const name of ['notes.md', 'notes.cy.md']) await page.getByRole('button', { name: `Download ${name}` }).click();
+  await until(() => downloads.length === 2, 'both files to download');
+  assert.deepEqual(downloads.map((download) => download.suggestedFilename()), ['notes.md', 'notes.cy.md']);
+  assert.equal(await readFile(await downloads[1].path(), 'utf8'), '## Cornel\n\n## Y canol\n', 'the Welsh notes moved with theirs');
   assert.deepEqual(problems, []);
   await close();
 });

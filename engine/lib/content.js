@@ -121,8 +121,9 @@ function languagesOf(language, texts) {
 
 /**
  * Everything in `dir` that the site is made from: the picture, the settings with their defaults, the description
- * as HTML (a language map, like every text), any notes on the picture, every language any of those texts is in,
- * what is `unused` in `dir`, and the `settings` as written, without the defaults that come from the picture. A
+ * as HTML (a language map, like every text), any notes on the picture (and `notesSource`, the file they are in, as
+ * written), every language any of those texts is in, what is `unused` in `dir`, and the `settings` as written,
+ * without the defaults that come from the picture. A
  * picture named by its link in the settings is downloaded into `downloads` with `fetch`.
  */
 export async function readContent(dir, { fetch = globalThis.fetch, downloads } = {}) {
@@ -146,11 +147,19 @@ export async function readContent(dir, { fetch = globalThis.fetch, downloads } =
   const description = await descriptions(dir, files, config.language);
   const written = await notesFiles(dir, files, config.language);
   const notes = written && combineNotes(written, config.language);
+  // For the notes helper: the files it edits, as written, the site's own first; the translations follow its notes.
+  const own = written?.[config.language];
+  const notesSource = own && {
+    file: own.file,
+    language: config.language,
+    text: own.text,
+    translations: Object.entries(written).flatMap(([language, { file, text }]) => (language === config.language ? [] : [{ file, language, text }])),
+  };
   const { summary, creator, date, attribution, alt, metadata } = config;
   const texts = [
     ...[title, summary, creator, date, attribution, alt, description, notes?.intro],
     ...metadata.flatMap(({ label, value }) => [label, value]),
     ...(notes?.items ?? []).flatMap((note) => [note.title, note.text]),
   ];
-  return { image, config, settings, description, notes, languages: languagesOf(config.language, texts), unused: unused(files, pictures, image) };
+  return { image, config, settings, description, notes, notesSource, languages: languagesOf(config.language, texts), unused: unused(files, pictures, image) };
 }

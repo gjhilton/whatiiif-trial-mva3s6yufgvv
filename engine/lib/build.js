@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readContent } from './content.js';
@@ -7,7 +7,7 @@ import { PAGES_BUDGET_BYTES, applyBudget } from './budget.js';
 import { missingFiles } from './service.js';
 import { buildManifest } from './manifest.js';
 import { committedToLfs, originalUrl, repositoryIsPublic } from './original.js';
-import { makeCard, makeIcon, personalisePage, wholeImage } from './page.js';
+import { banner, makeCard, makeIcon, personalisePage, stamp, wholeImage } from './page.js';
 
 const LOCAL_BASE_URL = 'http://localhost:4173';
 const LOWEST_QUALITY = 45; // below this, JPEG tiles look blocky up close
@@ -35,7 +35,7 @@ async function original(image, config, env) {
 export async function build({ contentDir, outDir, env = process.env, log = () => {}, warn = log, fetch = globalThis.fetch, budgetBytes = PAGES_BUDGET_BYTES }) {
   const downloads = await mkdtemp(join(tmpdir(), 'whatiiif-picture-'));
   try {
-    const { image, config, settings, description, notes, languages, unused } = await readContent(contentDir, { fetch, downloads });
+    const { image, config, settings, description, notes, notesSource, languages, unused } = await readContent(contentDir, { fetch, downloads });
     for (const file of unused) warn(file);
 
     const baseUrl = (config.base_url || env.SITE_BASE_URL || LOCAL_BASE_URL).replace(/\/+$/, '');
@@ -121,14 +121,26 @@ export async function build({ contentDir, outDir, env = process.env, log = () =>
       pageUrl,
     };
     await writeFile(join(outDir, 'site.json'), JSON.stringify(site, null, 2));
-    // For the settings helper (settings.html): the settings as written, and the page on GitHub that edits them.
-    const editUrl = env.GITHUB_REPOSITORY && `https://github.com/${env.GITHUB_REPOSITORY}/edit/${env.GITHUB_REF_NAME ?? 'main'}/content/whatiiif.toml`;
-    await writeFile(join(outDir, 'settings.json'), JSON.stringify({ settings, editUrl }, null, 2));
+    // For the settings helper (settings.html) and the notes helper (notes.html): the settings and notes as written,
+    // and the pages on GitHub that change them, or make notes.md where there is none yet.
+    const github = env.GITHUB_REPOSITORY && `https://github.com/${env.GITHUB_REPOSITORY}`;
+    const branch = env.GITHUB_REF_NAME ?? 'main';
+    const editUrl = github && `${github}/edit/${branch}/content/whatiiif.toml`;
+    const fileUrl = (file) => github && `${github}/edit/${branch}/content/${file}`;
+    const notesUrl = github && (notesSource ? fileUrl(notesSource.file) : `${github}/new/${branch}?filename=content/notes.md`);
+    const notesFiles = notesSource && { ...notesSource, translations: notesSource.translations.map((other) => ({ ...other, url: fileUrl(other.file) })) };
+    // Several files changed at once are uploaded together, in one commit; Actions says why a build stopped.
+    const uploadUrl = github && `${github}/upload/${branch}/content`;
+    const actionsUrl = github && `${github}/actions`;
+    await writeFile(join(outDir, 'settings.json'), JSON.stringify({ settings, editUrl, notes: notesFiles, notesUrl, uploadUrl, actionsUrl }, null, 2));
     // The icon and the picture a shared link shows, cut from whole-picture files already published.
     const whole = wholeImage({ info, imageId });
     await makeIcon(join(imageDir, whole.path), join(outDir, 'icon.png'));
     const card = { url: `${pageUrl}card.jpg`, ...(await makeCard(join(imageDir, wholeImage({ info, imageId, maxSide: 2000 }).path), join(outDir, 'card.jpg'))) };
     await personalisePage(join(outDir, 'index.html'), { site, image: whole, card });
+    // Every page says what made it, so whoever reads its source can find WhatIIIF, and which version it was.
+    const comment = await banner(env.GITHUB_REPOSITORY);
+    for (const page of (await readdir(outDir)).filter((name) => name.endsWith('.html'))) await stamp(join(outDir, page), comment);
 
     log(`Done: ${Math.round(bytes / 1024 / 1024)} MB of IIIF files at ${baseUrl}/iiif/`);
     return { baseUrl, pageUrl, manifestId, bytes, droppedFull, image, card, site };

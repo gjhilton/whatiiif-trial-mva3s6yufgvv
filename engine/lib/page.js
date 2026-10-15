@@ -4,6 +4,37 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
+const ENGINE = new URL('../', import.meta.url); // engine/, which holds VERSION and UPSTREAM
+
+/** Text that can go in an HTML comment: `--` would end it, so an address's second hyphen is written %2D. */
+const commentable = (text) => text.replace(/--/g, '-%2D');
+
+/**
+ * The comment at the top of every published page: that WhatIIIF made it, which version, where WhatIIIF is, and, in a
+ * workflow run, the repository the site is made from.
+ */
+export async function banner(repository) {
+  const [version, upstream] = await Promise.all(['VERSION', 'UPSTREAM'].map(async (name) => (await readFile(new URL(name, ENGINE), 'utf8')).trim()));
+  const rule = `  ${'='.repeat(76)}`;
+  const lines = [
+    `Published with WhatIIIF ${version}`,
+    `https://github.com/${upstream}`,
+    '',
+    'One large picture on the web, zoomable, and published as IIIF.',
+    ...(repository ? ['', 'This site is made from', `https://github.com/${repository}`] : []),
+  ];
+  return ['<!--', rule, '', ...lines.map((line) => (line ? `    ${commentable(line)}` : '')), '', rule, '-->'].join('\n');
+}
+
+const BANNER = /<!--\n {2}=+\n[\s\S]*?Published with WhatIIIF[\s\S]*?-->\n/;
+
+/** Writes `comment` at the top of the page in `file`, after its doctype, in place of one written before. */
+export async function stamp(file, comment) {
+  const html = (await readFile(file, 'utf8')).replace(BANNER, '');
+  const doctype = /^\s*<!doctype html>\s*/i.exec(html)?.[0] ?? '';
+  await writeFile(file, `${doctype ? `${doctype.trim()}\n` : ''}${comment}\n${html.slice(doctype.length)}`);
+}
+
 const escape = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** A text in the site's own language (else any it has), with the `lang` attribute that goes with it. */

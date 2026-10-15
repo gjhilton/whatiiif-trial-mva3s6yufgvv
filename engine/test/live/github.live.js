@@ -7,7 +7,7 @@ import { copyFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { makePhonePhoto, makeRepeatedNoise } from '../support/fixtures.js';
 import { run } from '../support/harness.js';
-import { MINUTE, gh, ghJson, git, poll, trialRepository } from './trial.js';
+import { MINUTE, gh, git, poll, trialRepository } from './trial.js';
 
 let trial;
 let firstRun;
@@ -21,9 +21,7 @@ test('a picture uploaded before Pages is switched on fails, saying how to switch
   const sha = await trial.upload('content/harbour.jpg', await makePhonePhoto());
   firstRun = await trial.deployRunFor(sha);
   assert.equal((await trial.finished(firstRun)).conclusion, 'failure');
-  const jobs = await ghJson('api', `repos/${trial.repository}/actions/runs/${firstRun}/jobs`);
-  const deploy = jobs.jobs.find((job) => job.name === 'deploy');
-  const messages = await ghJson('api', `repos/${trial.repository}/check-runs/${deploy.id}/annotations`, '--jq', '[.[].message]');
+  const messages = (await trial.deployAnnotations(firstRun)).map(([, , message]) => message);
   assert.ok(
     messages.includes("GitHub Pages is not enabled. Go to Settings > Pages and set Source to 'GitHub Actions', then re-run this workflow."),
     `the run's messages were: ${messages.join(' | ')}`,
@@ -62,10 +60,7 @@ test('a picture too big for the browser goes through Git LFS, and a site near th
     return code === 0 && stdout.includes('Done:') && stdout;
   }, `the log of run ${id}`, 5 * MINUTE);
   // Said at the top of the run's page (the log shows GitHub's rewriting of the command, not the command).
-  const jobs = await ghJson('api', `repos/${repository}/actions/runs/${id}/jobs`);
-  const deploy = jobs.jobs.find((job) => job.name === 'deploy');
-  const notes = await ghJson('api', `repos/${repository}/check-runs/${deploy.id}/annotations`, '--jq', '[.[] | [.annotation_level, .title, .message]]');
-  assert.deepEqual(notes, [['warning', 'Worth a look', 'The site would have been too big for GitHub Pages, so the full-size JPEG was left out.']]);
+  assert.deepEqual(await trial.deployAnnotations(id), [['warning', 'Worth a look', 'The site would have been too big for GitHub Pages, so the full-size JPEG was left out.']]);
   const megabytes = Number(log.match(/Done: (\d+) MB of IIIF files/)?.[1]);
   assert.ok(megabytes > 700 && megabytes < 900, `the site holds ${megabytes} MB of IIIF files`);
 

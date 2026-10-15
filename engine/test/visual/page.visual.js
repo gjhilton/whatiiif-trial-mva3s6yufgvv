@@ -183,6 +183,19 @@ test('a page with notes, on its tour', async ({ browser }) => {
   await close();
 });
 
+test('the notes helper', async ({ browser }) => {
+  const { page, problems, close } = await open(browser, three, { query: 'notes.html' });
+  await expect(page.locator('.note-area')).toHaveCount(3);
+  await page.getByRole('button', { name: /^Note 2: / }).click();
+  await page.getByRole('button', { name: 'Show note 2' }).click();
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2500); // the picture moves to the note
+  await page.evaluate(() => document.activeElement.blur()); // no focus ring
+  await expect(page).toHaveScreenshot('notes-helper.png', { fullPage: true });
+  expect(problems).toEqual([]);
+  await close();
+});
+
 test('the page printed', async ({ browser }) => {
   // The citation gives the day the page was viewed: always the same one here.
   const { page, close } = await open(browser, one, { query: '?viewer=openseadragon', before: (p) => p.clock.setFixedTime(new Date(2026, 9, 15, 12)) });

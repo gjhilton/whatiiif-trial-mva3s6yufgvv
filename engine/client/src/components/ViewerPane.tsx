@@ -5,6 +5,7 @@ import type { MountedViewer } from '../viewers/types';
 import type { Site, ViewerId } from '../site';
 import { inLanguage } from '../language';
 import type { Region } from '../address';
+import { keepUpright } from '../viewers/upright';
 
 interface Props {
   site: Site;
@@ -38,6 +39,9 @@ export function ViewerPane({ site, viewer, language, startAt, goTo, onRegionChan
     query.addEventListener('change', change);
     return () => query.removeEventListener('change', change);
   }, []);
+
+  // Links to the view describe the picture as it is, so neither viewer turns or mirrors it.
+  useEffect(() => keepUpright(host.current!), []);
 
   useEffect(() => {
     let cancelled = false;

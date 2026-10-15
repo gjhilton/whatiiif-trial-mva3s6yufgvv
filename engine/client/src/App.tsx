@@ -18,9 +18,13 @@ const showInAddress = (href: string) => {
   if (href !== location.href) history.replaceState(null, '', href);
 };
 
-export function App({ site }: { site: Site }) {
+/**
+ * The page. As a preview of notes being written (`preview`), it shows them in OpenSeadragon only: Mirador lists the
+ * notes from the manifest, which are the notes the site has.
+ */
+export function App({ site, preview = false }: { site: Site; preview?: boolean }) {
   const [asked] = useState(() => readAddress(location.href, site, VIEWER_IDS));
-  const [viewer, setViewer] = useState(asked.viewer ?? site.viewer);
+  const [viewer, setViewer] = useState<ViewerId>(preview ? 'openseadragon' : (asked.viewer ?? site.viewer));
   const [language, setLanguage] = useState(() => chooseLanguage(site, [asked.language, ...navigator.languages]));
   const [region, setRegion] = useState(asked.region);
   const [goTo, setGoTo] = useState<{ region: Region }>();
@@ -121,7 +125,7 @@ export function App({ site }: { site: Site }) {
           {site.languages.length > 1 && (
             <Toggle label="Language" options={site.languages} chosen={language} onChoose={switchLanguage} name={languageName} lang />
           )}
-          <Toggle label="Viewer" options={VIEWER_IDS} chosen={viewer} onChoose={switchViewer} name={(id) => viewers[id].label} />
+          {!preview && <Toggle label="Viewer" options={VIEWER_IDS} chosen={viewer} onChoose={switchViewer} name={(id) => viewers[id].label} />}
         </div>
       </header>
       {viewerPane}

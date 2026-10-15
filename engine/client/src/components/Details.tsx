@@ -101,7 +101,7 @@ export function Details({ site, language, link, embed, cite, show, save, note, s
         <CopyField label="Image service (info.json)" value={infoUrl} />
         <p className="links">
           <a href={`https://projectmirador.org/embed/?iiif-content=${encodeURIComponent(manifestUrl)}`}>Open in Mirador</a>
-          <a href={`https://uv-v4.netlify.app/#?manifest=${encodeURIComponent(manifestUrl)}`}>Open in Universal Viewer</a>
+          <a href={`https://universalviewer.dev/uv.html#?manifest=${encodeURIComponent(manifestUrl)}`}>Open in Universal Viewer</a>
           <a href={manifestUrl}>View manifest</a>
         </p>
 
