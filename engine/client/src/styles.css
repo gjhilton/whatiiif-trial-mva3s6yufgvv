@@ -109,6 +109,79 @@ a { color: var(--ink); text-underline-offset: 0.15em; }
 .settings-file textarea { width: 100%; margin-bottom: 0.5rem; font: 0.8rem/1.45 ui-monospace, monospace; }
 .settings-file ol { padding-left: 1.25rem; }
 
+/* The notes helper (notes.html): the picture beside the notes on a wide screen, filling it, the notes scrolling
+   beside the picture; above them on a narrow one. Each note's part is outlined and numbered on the picture. */
+.notes-workspace { border-top: 3px solid var(--ink); }
+.notes-picture .viewer { border-top: 0; }
+.notes-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; padding: 0.75rem 16px; }
+.notes-toolbar .hint { flex-basis: 100%; min-height: 2lh; margin: 0; } /* the same height drawing or not: the picture keeps its size */
+.notes-toolbar-note { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 0.5rem; align-items: center; font-weight: 600; }
+.notes-panel { padding: 0 16px 3rem; }
+@media (min-width: 60rem) and (min-height: 32rem) {
+  .notes-helper { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  .notes-helper .masthead { max-width: none; width: 100%; margin: 0; }
+  .notes-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(24rem, 36rem); }
+  .notes-picture { display: flex; flex-direction: column; min-height: 0; border-right: 3px solid var(--ink); }
+  .notes-picture .viewer { flex: 1; height: auto; min-height: 0; border-bottom-width: 1px; }
+  .notes-panel { position: relative; overflow-y: auto; padding-inline: 1.25rem; } /* what it hides from sight stays within it */
+  .notes-toolbar-note { display: none; } /* the open note's own buttons are in view beside the picture */
+}
+.note-area { border: 2px solid var(--ink); box-shadow: 0 0 0 2px var(--paper), inset 0 0 0 2px var(--paper); pointer-events: none; user-select: none; container-type: size; }
+.note-area[data-selected] { border-width: 4px; }
+.note-area .note-marker { position: absolute; top: -2px; left: -2px; pointer-events: auto; }
+/* The chosen note's number sits above its part, clear of the corner, and is dragged to move it. */
+.note-area[data-selected] .note-marker { top: auto; bottom: calc(100% + 10px); cursor: move; touch-action: none; }
+.note-handle { position: absolute; width: 14px; height: 14px; border: 2px solid var(--ink); background: var(--paper); pointer-events: auto; touch-action: none; }
+@media (pointer: coarse) { .note-handle { width: 22px; height: 22px; } }
+@container (max-width: 48px) or (max-height: 48px) { .note-handle { display: none; } } /* too small to hold them: zoom in */
+.note-handle[data-corner='nw'] { top: 0; left: 0; translate: -50% -50%; cursor: nwse-resize; }
+.note-handle[data-corner='ne'] { top: 0; right: 0; translate: 50% -50%; cursor: nesw-resize; }
+.note-handle[data-corner='se'] { bottom: 0; right: 0; translate: 50% 50%; cursor: nwse-resize; }
+.note-handle[data-corner='sw'] { bottom: 0; left: 0; translate: -50% 50%; cursor: nesw-resize; }
+.drawn-area { border: 2px dashed var(--ink); box-shadow: 0 0 0 2px var(--paper); pointer-events: none; }
+.drawing .openseadragon-canvas { cursor: crosshair; }
+/* A part can be drawn from anywhere, over a number or a corner too. */
+.drawing :is(.note-area .note-marker, .note-handle) { pointer-events: none; }
+.notes-status { padding: 1rem 0 0.25rem; }
+.notes-status p { margin: 0 0 0.6rem; }
+.notes-status .button { display: inline-block; padding: 0.35rem 0.8rem; border: 1px solid var(--ink); font-weight: 600; text-decoration: none; }
+.notes-status .button + .hint { display: block; margin-top: 0.3rem; }
+.notes-section { margin-top: 1.25rem; }
+.notes-section > h2 { margin-bottom: 0.5rem; }
+.notes-empty { font-size: 0.95rem; }
+.notes-list { margin: 0; padding: 0; list-style: none; }
+.note { border-bottom: 1px solid var(--ink); }
+.notes-section > .note, .notes-list { border-top: 1px solid var(--ink); }
+.note-row { display: flex; gap: 0.5rem; align-items: center; }
+.settings .note-row-button { flex: 1; display: flex; flex-wrap: wrap; gap: 0.15rem 0.6rem; align-items: baseline; min-width: 0; padding: 0.6rem 0; border: 0; background: none; color: var(--ink); text-align: left; font-weight: 400; }
+.settings .note-row-button:active { background: none; color: var(--ink); }
+.note-row-title { font-weight: 700; }
+.note[data-open] .note-row-title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.note-row-detail { flex-basis: 100%; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-number { display: inline-grid; place-items: center; min-width: 1.75rem; height: 1.75rem; padding: 0 0.35rem; background: var(--ink); color: var(--paper); font: 700 0.85rem/1 system-ui, sans-serif; }
+.note-order { display: flex; }
+.settings .note-order button { width: 2rem; height: 2rem; padding: 0; font-weight: 700; }
+.settings .note-order button + button { border-left: 0; }
+.note-problems { margin: -0.2rem 0 0.6rem; padding-left: 0; list-style: none; color: var(--error); font-size: 0.85rem; font-weight: 600; }
+.note-editor { padding: 0.25rem 0 1rem; }
+.notes-list :is(.note-row-detail, .note-problems, .note-editor) { padding-left: 2.35rem; } /* under the title, past the number */
+.note-editor textarea { field-sizing: content; min-height: 4.5lh; max-height: 60vh; }
+.note-translation legend { font-size: 0.9rem; }
+.note-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+.settings button:disabled { opacity: 0.4; cursor: default; }
+.notes-removed { margin: 0.75rem 0 0; }
+.notes-publish { padding-top: 1rem; border-top: 3px solid var(--ink); }
+.notes-publish .steps { padding-left: 1.25rem; }
+.notes-publish .steps li { margin-bottom: 0.5rem; }
+.notes-publish .problem ul { padding-left: 1.25rem; }
+.settings .notes-publish button.link { padding: 0; border: 0; background: none; color: var(--error); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 0.15em; }
+.notes-files summary { margin: 1rem 0 0.5rem; font-weight: 600; cursor: pointer; }
+.notes-files textarea { display: block; width: 100%; margin-bottom: 0.5rem; font: 0.8rem/1.45 ui-monospace, monospace; }
+.notes-elsewhere { max-width: 72rem; margin: 1.5rem auto; padding: 0 16px; } /* under the heading, as the page's text is */
+/* The page as a preview of notes not yet published, from the notes helper. */
+.preview-banner { margin: 0; padding: 0.6rem 16px; background: var(--ink); color: var(--paper); font-weight: 600; text-align: center; }
+.preview-banner a { color: var(--paper); }
+
 /* On paper: the title, the view as it was on screen, the details, and the citation; black on white, whatever the
    screen's colours, since browsers leave backgrounds out of print. */
 .print-only, .print-view { display: none; }

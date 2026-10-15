@@ -244,7 +244,13 @@ test('the summary of a run says how many notes the picture has, and in which lan
   await writeFile(join(content, 'notes.md'), '## [The boat](#xywh=100,200,300,400)\n\n## [The gull](#xywh=10,20,30,40)\n');
   await writeFile(join(content, 'notes.cy.md'), '## Y cwch\n\n## Yr wylan\n');
   const { summary } = await buildInActions(content, await tempDir('dist'));
-  assert.match(summary, /\| Notes \| 2, in English and Welsh \|/);
+  assert.match(summary, /\| Notes \| 2, in English and Welsh\. \[Change them with the notes helper\]\(https:\/\/gjh\.github\.io\/harbour\/notes\.html\) \|/);
+});
+
+test('the summary of a run without notes says where they can be added', async () => {
+  const { content } = await setup();
+  const { summary } = await buildInActions(content, await tempDir('dist'));
+  assert.match(summary, /\| Notes \| None\. \[Add some with the notes helper\]\(https:\/\/gjh\.github\.io\/harbour\/notes\.html\) \|/);
 });
 
 test('the page is told who made the picture, when, and how big it is', async () => {
@@ -335,4 +341,57 @@ test('a photo turned on its side by its camera is measured upright, for its note
   await build({ contentDir: content, outDir: out, env: {} });
   const { width, height } = await read(join(out, 'site.json'));
   assert.deepEqual({ width, height }, { width: 200, height: 300 });
+});
+
+test('the notes helper is given the notes files as written, and where to change them on GitHub and see them built', async () => {
+  const { content, out } = await setup();
+  const source = 'Look.\n\n## [The boat](#xywh=100,200,300,400)\n\nRed sails.\n';
+  await writeFile(join(content, 'notes.md'), source);
+  await writeFile(join(content, 'notes.cy.md'), '## Y cwch\n');
+  await build({ contentDir: content, outDir: out, env: github });
+  const { notes, notesUrl, uploadUrl, actionsUrl } = await read(join(out, 'settings.json'));
+  assert.deepEqual(notes, {
+    file: 'notes.md',
+    language: 'en',
+    text: source,
+    translations: [{ file: 'notes.cy.md', language: 'cy', text: '## Y cwch\n', url: 'https://github.com/gjh/harbour/edit/main/content/notes.cy.md' }],
+  });
+  assert.equal(notesUrl, 'https://github.com/gjh/harbour/edit/main/content/notes.md');
+  assert.equal(uploadUrl, 'https://github.com/gjh/harbour/upload/main/content', 'several files are changed at once by uploading them');
+  assert.equal(actionsUrl, 'https://github.com/gjh/harbour/actions', 'where a build that stopped says why');
+});
+
+test('without notes, the notes helper is told where on GitHub to make notes.md', async () => {
+  const { content, out } = await setup();
+  await build({ contentDir: content, outDir: out, env: github });
+  const { notes, notesUrl } = await read(join(out, 'settings.json'));
+  assert.equal(notes, undefined);
+  assert.equal(notesUrl, 'https://github.com/gjh/harbour/new/main?filename=content/notes.md');
+});
+
+test('every published page says at the top that WhatIIIF made it, which version, and where WhatIIIF and the site come from', async () => {
+  const { content, out } = await setup();
+  const pages = ['index.html', 'settings.html', 'notes.html'];
+  for (const page of pages) await writeFile(join(out, page), `<!doctype html>\n<html lang="en">${builtPage}</html>\n`);
+  await build({ contentDir: content, outDir: out, env: github });
+  await build({ contentDir: content, outDir: out, env: github }); // built again, as every push does
+  const version = (await readFile(join(repo, 'engine/VERSION'), 'utf8')).trim();
+  for (const page of pages) {
+    const html = await readFile(join(out, page), 'utf8');
+    const [comment] = html.match(/^<!doctype html>\n<!--[\s\S]*?-->\n<html/) ?? [];
+    assert.ok(comment, `${page} starts with the comment, after its doctype`);
+    assert.ok(comment.includes(`Published with WhatIIIF ${version}\n`), page);
+    assert.ok(comment.includes('https://github.com/gjhilton/WhatIIIF\n'), page);
+    assert.ok(comment.includes('https://github.com/gjh/harbour\n'), `${page} names the site's own repository`);
+    assert.equal(html.match(/Published with WhatIIIF/g).length, 1, `${page} has it once, however often it is built`);
+  }
+});
+
+test('the comment cannot be ended early by a repository whose name has two hyphens in a row', async () => {
+  const { content, out } = await setup();
+  await writeFile(join(out, 'index.html'), `<!doctype html>\n<html>${builtPage}</html>`);
+  await build({ contentDir: content, outDir: out, env: { ...github, GITHUB_REPOSITORY: 'gjh/harbour--at-dusk' } });
+  const [comment] = (await readFile(join(out, 'index.html'), 'utf8')).match(/<!--[\s\S]*?-->/);
+  assert.equal(comment.slice(4, -3).includes('--'), false);
+  assert.ok(comment.includes('https://github.com/gjh/harbour-%2Dat-dusk'), 'the address still leads there');
 });

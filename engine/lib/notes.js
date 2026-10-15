@@ -6,6 +6,15 @@ import { marked } from 'marked';
 const REGION = /#xywh=(?:pixel:)?(\d+),(\d+),(\d+),(\d+)$/;
 const EXAMPLE = '## [The lighthouse](the link to it)';
 
+/** Whether a block token starts a note: a ## heading, not words underlined with dashes, which are often an accident. */
+const startsNote = (token) => token.type === 'heading' && token.depth === 2 && token.raw.startsWith('#');
+const regionOf = (href) => {
+  const match = REGION.exec(href ?? '');
+  if (!match) return undefined;
+  const [x, y, w, h] = match.slice(1).map(Number);
+  return { x, y, w, h };
+};
+
 /** The words in some inline tokens, without their markup. */
 const plain = (tokens = []) => tokens.map((token) => (token.tokens ? plain(token.tokens) : (token.text ?? ''))).join('');
 
@@ -26,7 +35,7 @@ export function parseNotes(text, file, { linked }) {
   for (const token of marked.lexer(text)) {
     // Only a ## heading starts a note: words underlined with dashes are a heading too, but one written by accident
     // as often as not, and they stay in the note's text.
-    if (token.type !== 'heading' || token.depth !== 2 || !token.raw.startsWith('#')) {
+    if (!startsNote(token)) {
       (items.at(-1)?.body ?? intro).push(token);
       continue;
     }
@@ -39,17 +48,12 @@ export function parseNotes(text, file, { linked }) {
     if (link && token.tokens.some((part) => part !== link && plain([part]).trim())) {
       throw new Error(`content/${file}: the note "${title}" has words outside its link. Make the whole heading the link: ## [${title}](${link.href})`);
     }
-    let region;
-    if (link) {
-      const match = REGION.exec(link.href);
-      if (!match) {
-        throw new Error(
-          `content/${file}: the note "${title}" links to ${link.href}, which is not a part of the picture. Zoom in on that part and copy "Link to this view".`,
-        );
-      }
-      const [x, y, w, h] = match.slice(1).map(Number);
-      region = { x, y, w, h };
-    } else if (linked) {
+    const region = link && regionOf(link.href);
+    if (link && !region) {
+      throw new Error(
+        `content/${file}: the note "${title}" links to ${link.href}, which is not a part of the picture. Zoom in on that part and copy "Link to this view".`,
+      );
+    } else if (!link && linked) {
       throw new Error(
         `content/${file}: the note "${title}" does not say which part of the picture it is about. Make its heading a link to that part: zoom in on it, copy "Link to this view", and write ## [${title}](the link).`,
       );
@@ -93,4 +97,88 @@ export function combineNotes(files, language) {
       return { region, title: map((notes) => notes.items[i].title), ...(text && { text }) };
     }),
   };
+}
+
+/**
+ * A paragraph's lines joined into one, as Markdown shows them, so that its text flows in the notes helper as it will
+ * on the page; but for a line ended by two spaces or a backslash, which breaks the paragraph there.
+ */
+function unwrap(paragraph) {
+  // The newline that ends it stays: a list, heading or code may start on the very next line.
+  const [, words, end] = /^([\s\S]*?)(\n*)$/.exec(paragraph);
+  const lines = words.split('\n');
+  return lines.reduce((text, line) => (/ {2,}$|\\$/.test(text) ? `${text}\n${line}` : `${text.trimEnd()} ${line.trimStart()}`)) + end;
+}
+
+/**
+ * notes.md as its owner wrote it, for the notes helper to edit: what introduces the notes, and each note's title, the
+ * part of the picture its heading links to (if it does) and its text, in Markdown. It takes what it is given, unlike
+ * parseNotes: the helper says what is missing.
+ */
+export function readNotesSource(text) {
+  const intro = [];
+  const items = [];
+  for (const token of marked.lexer(text)) {
+    if (!startsNote(token)) {
+      (items.at(-1)?.body ?? intro).push({ raw: token.raw, joined: token.type === 'paragraph' ? unwrap(token.raw) : token.raw });
+      continue;
+    }
+    const link = token.tokens.find((part) => part.type === 'link');
+    items.push({ title: plain(token.tokens).trim(), region: regionOf(link?.href), body: [] });
+  }
+  // Joining a paragraph's lines can change how Markdown reads what follows it (a line underlined with dashes, say,
+  // takes the whole paragraph into its heading), so they are joined only where the page would show the same.
+  const markdown = (parts) => {
+    const [raw, joined] = [blocks(parts.map((part) => part.raw).join('')), blocks(parts.map((part) => part.joined).join(''))];
+    return joined !== raw && asShown(marked.parse(joined)) === asShown(marked.parse(raw)) ? joined : raw;
+  };
+  return { intro: markdown(intro), items: items.map(({ title, region, body }) => ({ title, region, text: markdown(body) })) };
+}
+
+/**
+ * HTML as a browser shows it: a run of spaces as one, and none at the start or end of a block of text; but every
+ * space and line in a <pre>, where they show, but for spaces at the end of a line.
+ */
+export const asShown = (html) =>
+  html
+    .split(/(<pre[\s>][\s\S]*?<\/pre>)/)
+    .map((part) =>
+      part.startsWith('<pre')
+        ? part.replace(/[ \t]+\n/g, '\n')
+        : // Only the spaces HTML collapses: a space that keeps two words together, say, shows as itself.
+          part
+            .replace(/[ \t\n\f\r]+/g, ' ')
+            .replace(/(<(?:p|li|h[1-6]|td|th|blockquote)>) /g, '$1')
+            .replace(/ (<\/(?:p|li|h[1-6]|td|th|blockquote)>)/g, '$1'),
+    )
+    .join('')
+    .replace(/^ | $/g, '');
+
+/** Whether Markdown has a ## heading in it, which in a notes file would start a note of its own. */
+export const startsNotes = (text = '') => marked.lexer(text).some(startsNote);
+
+/** The names of the link addresses written in Markdown as [name]: https://…, as Markdown matches them. */
+export const linkNames = (text) => Object.keys(marked.lexer(text).links ?? {});
+
+/**
+ * Markdown without the blank lines before and after it, but with the spaces that start its first line, which can
+ * make it code.
+ */
+const blocks = (text) => text.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd();
+
+/** `text` escaped so Markdown shows every character of it as it is, rather than reading any as markup. */
+const literal = (text) => text.replace(/[\\`*_[\]<>&~#]/g, '\\$&');
+
+/**
+ * notes.md for `notes`, as readNotesSource gives them: each note's heading links to its part of the picture on the
+ * page at `pageUrl`, so it opens there from GitHub too. A note with no part yet has a plain heading, which the build
+ * explains.
+ */
+export function writeNotesSource({ intro, items }, pageUrl) {
+  const notes = items.map(({ title, region, text }) => {
+    const words = literal(title.trim());
+    const heading = region ? `## [${words}](${pageUrl}#xywh=${region.x},${region.y},${region.w},${region.h})` : `## ${words}`;
+    return [heading, blocks(text)].filter(Boolean).join('\n\n');
+  });
+  return `${[blocks(intro), ...notes].filter(Boolean).join('\n\n')}\n`;
 }
