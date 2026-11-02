@@ -7,6 +7,7 @@ import type { Region } from '../address';
 import { pageColour } from '../colours';
 import { addControls } from '../viewers/controls';
 import { keepUpright } from '../viewers/upright';
+import { motion } from '../viewers/motion';
 
 export interface Picture {
   /** The part of the picture on screen, in whole pixels within it. */
@@ -43,6 +44,7 @@ const MARGIN = 0.15; // of a note's part, shown round it
 /** Opens the picture of `site` in `el`. */
 export function openPicture(el: HTMLElement, site: Site, { onChoose, onAdjust, onError }: PictureEvents): Picture {
   const viewer = OpenSeadragon({
+    ...motion(),
     element: el,
     tileSources: site.infoUrl,
     showNavigationControl: false, // our own buttons, as on the page
