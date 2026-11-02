@@ -50,6 +50,8 @@ export interface Site {
   height: number;
   /** The page's own public address. */
   pageUrl: string;
+  /** For the line at the foot of the page, unless its owner switched it off: the WhatIIIF that made it. */
+  footer?: { version: string; url: string };
 }
 
 /**

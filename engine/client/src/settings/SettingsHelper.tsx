@@ -24,7 +24,7 @@ export interface Settings {
   base_url?: string;
   metadata: { label: Text; value: Text }[];
   tiles: { size: number; quality: number };
-  publish: { full: boolean; original: boolean };
+  publish: { full: boolean; original: boolean; footer: boolean };
   colours: Record<string, string>;
 }
 
@@ -229,6 +229,10 @@ export function SettingsHelper({ initial, editUrl, title }: { initial?: Settings
             <label className="check">
               <input type="checkbox" checked={settings.publish.original} onChange={(event) => set('publish', { ...settings.publish, original: event.target.checked })} />
               Offer the original file to download
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={settings.publish.footer} onChange={(event) => set('publish', { ...settings.publish, footer: event.target.checked })} />
+              Say “Published with WhatIIIF” at the foot of the page
             </label>
             <details>
               <summary>Advanced</summary>
