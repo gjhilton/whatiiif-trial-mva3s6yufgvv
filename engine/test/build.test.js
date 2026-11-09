@@ -369,6 +369,16 @@ test('without notes, the notes helper is told where on GitHub to make notes.md',
   assert.equal(notesUrl, 'https://github.com/gjh/harbour/new/main?filename=content/notes.md');
 });
 
+test('the page is given the version of WhatIIIF and its address for its footer, unless the footer is switched off', async () => {
+  const { content, out } = await setup();
+  await build({ contentDir: content, outDir: out, env: github });
+  const version = (await readFile(join(repo, 'engine/VERSION'), 'utf8')).trim();
+  assert.deepEqual((await read(join(out, 'site.json'))).footer, { version, url: 'https://github.com/gjhilton/WhatIIIF' });
+  await writeFile(join(content, 'whatiiif.toml'), '[publish]\nfooter = false\n');
+  await build({ contentDir: content, outDir: out, env: github });
+  assert.equal((await read(join(out, 'site.json'))).footer, undefined);
+});
+
 test('every published page says at the top that WhatIIIF made it, which version, and where WhatIIIF and the site come from', async () => {
   const { content, out } = await setup();
   const pages = ['index.html', 'settings.html', 'notes.html'];

@@ -143,6 +143,18 @@ export async function browse(browser, { siteUrl, fileFor, query = '', locale = '
   return { page, fetched, problems, close: () => context.close() };
 }
 
+/**
+ * Clicks `link` on `page`, which closes the page, and waits for it to close. The click can see the page close under
+ * it, as it should: that is a failure only if the page is still open.
+ */
+export async function clickToClose(page, link) {
+  const closed = page.waitForEvent('close');
+  await link.click().catch((error) => {
+    if (!page.isClosed()) throw error;
+  });
+  await closed;
+}
+
 export async function until(condition, what, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (!(await condition())) {
