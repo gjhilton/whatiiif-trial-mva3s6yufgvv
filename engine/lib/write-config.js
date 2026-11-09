@@ -1,7 +1,7 @@
 // whatiiif.toml written out from settings, as config.js reads them: what the settings helper gives its owner to
 // commit. Only what differs from the defaults is written, so the file says what its owner chose.
 
-const DEFAULTS = { language: 'en', viewer: 'openseadragon', tiles: { size: 512, quality: 85 }, publish: { full: true, original: true } };
+const DEFAULTS = { language: 'en', viewer: 'openseadragon', tiles: { size: 512, quality: 85 }, publish: { full: true, original: true, footer: true } };
 const TEXTS = ['title', 'summary', 'creator', 'date', 'attribution', 'alt'];
 const SIMPLE = ['rights', 'dimensions', 'picture', 'viewer', 'base_url'];
 

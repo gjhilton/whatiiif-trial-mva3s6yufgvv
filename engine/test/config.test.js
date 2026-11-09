@@ -13,7 +13,7 @@ test('an empty config gets defaults; the title is left to the picture to name', 
   assert.equal(c.viewer, 'openseadragon');
   assert.equal(c.tiles.size, 512);
   assert.equal(c.tiles.quality, 85);
-  assert.deepEqual(c.publish, { full: true, original: true });
+  assert.deepEqual(c.publish, { full: true, original: true, footer: true });
   assert.deepEqual(c.colours, {});
   assert.deepEqual(c.metadata, []);
   assert.equal(c.creator, undefined);
@@ -60,6 +60,7 @@ quality = 70
 [publish]
 full = false
 original = false
+footer = false
 
 [colours]
 paper = "#FDF6E3"
@@ -74,7 +75,7 @@ viewer = "black"
   assert.equal(c.base_url, 'https://iiif.example.org');
   assert.deepEqual(c.metadata, [{ label: { en: 'Date' }, value: { en: '1890' } }]);
   assert.equal(c.tiles.size, 256);
-  assert.deepEqual(c.publish, { full: false, original: false });
+  assert.deepEqual(c.publish, { full: false, original: false, footer: false });
   assert.deepEqual(c.colours, { paper: '#FDF6E3', ink: 'rgb(20 20 20 / 90%)', viewer: 'black' });
 });
 
@@ -199,6 +200,7 @@ const mistakes = [
   ['[tiles]\nsize = "512"', /"tiles\.size" must be a whole number from 64 to 4096 \(got "512"\)/],
   ['[tiles]\nquality = 85.5', /"tiles\.quality" must be a whole number from 1 to 100 \(got 85\.5\)/],
   ['[publish]\noriginal = "yes"', /"publish\.original" must be true or false, without quotes \(got "yes"\)/],
+  ['[publish]\nfooter = "no"', /"publish\.footer" must be true or false, without quotes \(got "no"\)/],
   ['title = { en = "Harbour", EN = "Port" }', /"title" gives "en" twice/],
   ['picture = "Harbour.tif"', /"picture" must be the web address of a picture, starting https:\/\/ \(got "Harbour\.tif"\)\. A picture in content\/ needs no setting\./],
   ['picture = 3', /"picture" must be the web address of a picture/],

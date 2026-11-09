@@ -145,6 +145,11 @@ export function App({ site, preview = false }: { site: Site; preview?: boolean }
           tourButton={tourButton}
         />
       </main>
+      {site.footer && (
+        <footer className="made-with">
+          Published with <a href={site.footer.url}>WhatIIIF</a> v{site.footer.version}
+        </footer>
+      )}
     </>
   );
 }
