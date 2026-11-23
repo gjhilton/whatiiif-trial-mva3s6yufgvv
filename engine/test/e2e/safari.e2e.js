@@ -7,7 +7,7 @@ import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { devices, webkit } from 'playwright';
 import { makeImage } from '../support/fixtures.js';
-import { browse, commit, deploy, templateCopy, until, zoomToFullResolution } from '../support/harness.js';
+import { browse, clickToClose, commit, deploy, templateCopy, until, zoomToFullResolution } from '../support/harness.js';
 
 let browser;
 let site;
@@ -125,7 +125,7 @@ test('in Safari, the notes helper previews its notes on the site’s page, and t
   const [preview] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('link', { name: 'Preview them on your site' }).click()]);
   await preview.locator('.notes').waitFor();
   assert.deepEqual(await preview.locator('.notes li h3').allTextContents(), ['The whole harbour']);
-  await Promise.all([preview.waitForEvent('close'), preview.getByRole('link', { name: 'Back to the notes helper' }).click()]);
+  await clickToClose(preview, preview.getByRole('link', { name: 'Back to the notes helper' }));
   assert.deepEqual(problems, []);
   await close();
 });

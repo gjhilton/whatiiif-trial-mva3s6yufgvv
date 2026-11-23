@@ -62,6 +62,9 @@ a { color: var(--ink); text-underline-offset: 0.15em; }
 .credit a { margin-left: auto; text-decoration: none; }
 .load-error { max-width: 40rem; margin: 4rem auto; padding: 0 16px; color: var(--error); font-weight: 600; }
 
+/* The line at the foot of the page, saying what made it: as small as text can comfortably be read. */
+.made-with { max-width: 72rem; margin: 0 auto; padding: 0 16px 1.5rem; font-size: 0.7rem; }
+
 /* A class, not the bare element: Mirador renders a <main> of its own inside the viewer. */
 .content { max-width: 72rem; margin: 0 auto; padding: 1.5rem 16px 4rem; }
 /* minmax(0, …): a long address must wrap, not widen the column past a phone's screen. */
@@ -187,7 +190,7 @@ a { color: var(--ink); text-underline-offset: 0.15em; }
 .print-only, .print-view { display: none; }
 @media print {
   html:root:root { color-scheme: light; --paper: #ffffff; --ink: #000000; --viewer: #ffffff; }
-  .controls, .viewer-host, .viewer-error, .details .uses, .tour, .notes-heading button { display: none; }
+  .controls, .viewer-host, .viewer-error, .details .uses, .tour, .notes-heading button, .made-with { display: none; }
   .print-only, .print-view { display: block; }
   .viewer { height: auto; border-block-width: 1px; }
   .print-view { width: 100%; height: auto; }

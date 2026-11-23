@@ -3,6 +3,7 @@
 # Only upstream-owned files are replaced (engine/, package.json, package-lock.json);
 # everything in content/ is yours and is never touched.
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/versions.sh"
 
 UPSTREAM=$(tr -d '[:space:]' < engine/UPSTREAM)
 if [[ "$UPSTREAM" != */* || "$UPSTREAM" == OWNER/* ]]; then
@@ -33,8 +34,9 @@ if [[ "$latest" == "$current" ]]; then
   echo "Already on the latest release ($current)."
   exit 0
 fi
-# A copy made from the template between two releases is ahead of the latest one.
-if [[ $(printf '%s\n' "$latest" "$current" | sort -V | tail -1) == "$current" ]]; then
+# A copy made from the template between two releases is ahead of the latest one. One made while the template was on a
+# pre-release (1.2.0-rc.1) is behind the release that follows it (1.2.0).
+if above "$current" "$latest"; then
   echo "$current is newer than the latest release ($latest), so there is nothing to update to."
   exit 0
 fi

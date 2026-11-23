@@ -59,7 +59,8 @@ async function callStepsAt(work, sha, upstream) {
 /**
  * A new public repository made with "Use this template", cloned, with the template's files (everything but
  * content/) replaced by those at `ref` here: HEAD to try this commit, or a release tag to start from that release.
- * Its workflows call the template's steps at `ref` too.
+ * A site made at a release is that release exactly, its workflows calling the steps at the tag they name, as a real
+ * site's do; one trying this commit calls this commit's steps, the only way to try them before they are released.
  */
 export async function trialRepository(ref = 'HEAD') {
   const owner = await gh('api', 'user', '--jq', '.login');
@@ -77,7 +78,7 @@ export async function trialRepository(ref = 'HEAD') {
   const entries = top.split('\n').filter((entry) => entry && entry !== 'content');
   await exec('bash', ['-c', 'git archive "$1" -- "${@:2}" | tar -x -C "$0"', work, ref, ...entries], { cwd: template });
   const { stdout: sha } = await exec('git', ['rev-parse', `${ref}^{commit}`], { cwd: template });
-  await callStepsAt(work, sha.trim(), upstream);
+  if (ref === 'HEAD') await callStepsAt(work, sha.trim(), upstream);
   await git(work, ['add', '-A']);
   if ((await run('git', ['diff', '--cached', '--quiet'], { cwd: work })).code !== 0) {
     await git(work, ['commit', '-q', '-m', `The template at ${ref}`]);

@@ -13,7 +13,7 @@ import { parseConfig } from '../../lib/config.js';
 import { readNotesSource } from '../../lib/notes.js';
 import { inspect, makeImage, makePhonePhoto, makeVariant } from '../support/fixtures.js';
 import { schemaProblems, schemaUnavailable } from '../support/schema.js';
-import { browse, commit, deploy, git, run, templateCopy, until, zoomToFullResolution } from '../support/harness.js';
+import { browse, clickToClose, commit, deploy, git, repo as template, run, templateCopy, until, zoomToFullResolution } from '../support/harness.js';
 import { tempDir } from '../support/tmp.js';
 
 const json = async (path) => JSON.parse(await readFile(path, 'utf8'));
@@ -54,6 +54,9 @@ suite('a photographer uploads a phone photo on github.com and fills in every set
         '[[metadata]]',
         'label = "Source"',
         'value = "https://archives.example.org/collections/harbour-views/1890/plate-17"',
+        '',
+        '[publish]',
+        'footer = false',
       ].join('\n'),
     );
     await writeFile(join(repo, 'content/description.md'), '## About this view\n\nTaken from the *north* pier, by [the lighthouse](#xywh=200,300,400,500).\n');
@@ -333,6 +336,15 @@ suite('a photographer uploads a phone photo on github.com and fills in every set
     await close();
   });
 
+  test('with the footer switched off, the foot of the page says nothing of WhatIIIF', async () => {
+    const { page, close } = await open(site);
+    await page.locator('.openseadragon-container').first().waitFor();
+    await page.locator('.details').waitFor();
+    assert.equal(await page.locator('.made-with').count(), 0);
+    assert.equal(await page.getByText(/Published with/).count(), 0);
+    await close();
+  });
+
   test('the settings helper starts from the settings as they are, and writes a file the build accepts, saying what is wrong when it is not', async () => {
     const { page, problems, close } = await open(site, 'settings.html');
     const file = page.getByRole('textbox', { name: 'whatiiif.toml' });
@@ -355,6 +367,14 @@ suite('a photographer uploads a phone photo on github.com and fills in every set
     assert.equal(await page.getByRole('textbox', { name: 'Title', exact: true }).inputValue(), 'Harbour at night');
     assert.match(await file.inputValue(), /^language = "cy"\ntitle = "Harbour at night"$/m);
     await page.getByRole('textbox', { name: 'Language of your texts' }).fill('en');
+
+    // The footer, switched off in this site's settings, is switched on again by ticking it, which is the default.
+    const footer = page.getByRole('checkbox', { name: 'Say “Published with WhatIIIF” at the foot of the page' });
+    assert.equal(await footer.isChecked(), false);
+    assert.match(await file.inputValue(), /^\[publish\]\nfooter = false$/m);
+    await footer.check();
+    assert.doesNotMatch(await file.inputValue(), /footer/);
+    await footer.uncheck();
 
     const size = page.getByRole('textbox', { name: 'Real size' });
     await size.fill('big');
@@ -560,6 +580,21 @@ suite('a visitor shares the part of the picture they have zoomed into', () => {
       await close();
     });
   }
+
+  test('the foot of the page says it was published with WhatIIIF, and which version, linking to WhatIIIF; an embedded picture does not', async () => {
+    const version = (await readFile(join(template, 'engine/VERSION'), 'utf8')).trim();
+    const { page, problems, close } = await open(site, '?viewer=openseadragon');
+    const footer = page.locator('footer.made-with');
+    await footer.waitFor();
+    assert.equal(await footer.textContent(), `Published with WhatIIIF v${version}`);
+    assert.equal(await footer.getByRole('link', { name: 'WhatIIIF' }).getAttribute('href'), 'https://github.com/gjhilton/WhatIIIF');
+    assert.deepEqual(problems, []);
+    await close();
+    const embedded = await open(site, '?embed');
+    await embedded.page.locator('.credit').waitFor();
+    assert.equal(await embedded.page.locator('.made-with').count(), 0);
+    await embedded.close();
+  });
 
   test('a link to a region outlines that region for a moment, so whoever opens it sees what was meant', async () => {
     const { page, close } = await open(site, '?viewer=openseadragon#xywh=2000,1500,500,400');
@@ -791,6 +826,43 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     await close();
   });
 
+  /**
+   * Gives the page a clock of its own, so that how far the picture gets in a given time does not depend on how fast
+   * this machine is. Installed before the page loads again, so its viewers take their time from it.
+   */
+  const ownClock = async (page) => {
+    await page.clock.install();
+    await page.reload();
+  };
+  const holdClock = async (page) => page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  /** Clicks `button` with the clock held, and lets the page answer the click, which its clock does not hold up. */
+  const press = async (page, button) => {
+    await button.click();
+    await page.waitForTimeout(100);
+  };
+
+  test('for a visitor whose computer is set to reduce motion, either viewer goes straight to a note rather than gliding there', async () => {
+    for (const [viewer, ready] of [['openseadragon', '.openseadragon-container'], ['mirador', '.mirador-window .openseadragon-container']]) {
+      for (const reducedMotion of ['no-preference', 'reduce']) {
+        const { page, close } = await open(site, `?viewer=${viewer}`, { device: { reducedMotion } });
+        await ownClock(page);
+        await page.locator(ready).first().waitFor();
+        await page.waitForLoadState('networkidle');
+        await page.getByRole('button', { name: 'Take the tour' }).click();
+        await until(() => holds(page, at(notes[0][1])), `${viewer}: the viewer to show the lighthouse`);
+        await holdClock(page);
+        await press(page, page.getByRole('region', { name: 'Tour' }).getByRole('button', { name: 'Next' }));
+        // The page puts the note's part in the address at once; the viewer puts what it shows there once it arrives.
+        const arrived = () => holds(page, at(notes[1][1])) && new URL(page.url()).hash !== `#xywh=${notes[1][1]}`;
+        await page.clock.runFor(200);
+        assert.equal(arrived(), reducedMotion === 'reduce', `${viewer}, ${reducedMotion}: at the boats a moment after Next`);
+        await page.clock.runFor(5000);
+        assert.equal(arrived(), true, `${viewer}, ${reducedMotion}: at the boats in the end`);
+        await close();
+      }
+    }
+  });
+
   // The notes helper (notes.html), which writes the notes files for the site's owner.
   const helper = async (on = site, options = {}) => {
     const opened = await open(on, 'notes.html', { device: { reducedMotion: 'reduce' }, ...options }); // so the page scrolls at once
@@ -823,6 +895,28 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     await page.mouse.up();
   };
   const middle = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+
+  test('in the notes helper too, Show it takes the picture straight to a note’s part when the computer is set to reduce motion', async () => {
+    for (const reducedMotion of ['no-preference', 'reduce']) {
+      const { page, note, close } = await helper(site, { device: { reducedMotion } });
+      await ownClock(page);
+      await page.locator('.openseadragon-canvas').first().waitFor();
+      await page.waitForLoadState('networkidle');
+      await note(1).click();
+      await page.getByRole('button', { name: 'Show note 1' }).click();
+      const area = page.locator('.note-area').nth(1);
+      await settled(area);
+      await note(2).click(); // the picture stays where it is until Show it
+      await holdClock(page);
+      await press(page, page.getByRole('button', { name: 'Show note 2' }));
+      await page.clock.runFor(200);
+      const soon = JSON.stringify(await area.boundingBox());
+      await page.clock.runFor(5000);
+      const there = JSON.stringify(await area.boundingBox());
+      assert.equal(soon === there, reducedMotion === 'reduce', `${reducedMotion}: note 2's part where it ends up a moment after Show it`);
+      await close();
+    }
+  });
 
   test('the notes helper starts from the notes as written, and writes what reads back as the same notes', async () => {
     const { page, problems, close, written, note } = await helper();
@@ -1079,7 +1173,7 @@ suite('a museum adds notes to its picture, which make a tour', () => {
     await page.getByRole('textbox', { name: 'Text', exact: true }).fill('');
 
     // Back to the helper closes the preview, rather than opening a second helper in it.
-    await Promise.all([preview.waitForEvent('close'), preview.getByRole('link', { name: 'Back to the notes helper' }).click()]);
+    await clickToClose(preview, preview.getByRole('link', { name: 'Back to the notes helper' }));
 
     // Starting again while a part is being drawn stops the drawing, which was for a note now gone.
     await page.getByRole('button', { name: 'Draw a new note’s part' }).click();

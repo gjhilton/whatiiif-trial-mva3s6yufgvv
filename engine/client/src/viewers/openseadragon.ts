@@ -4,10 +4,12 @@ import type { Region } from '../address';
 import { pageColour } from '../colours';
 import { scaleLength } from '../describe';
 import { addControls } from './controls';
+import { motion } from './motion';
 
 const adapter: ViewerAdapter = {
   mount(el, site, { region, onRegionChange, onError, cooperative, onNote }) {
     const viewer = OpenSeadragon({
+      ...motion(),
       element: el,
       tileSources: site.infoUrl,
       showNavigationControl: false, // our own buttons, below

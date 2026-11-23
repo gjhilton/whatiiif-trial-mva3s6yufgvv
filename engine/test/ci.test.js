@@ -262,6 +262,20 @@ test('a repository newer than the latest release, made from the template between
   await leftAlone(user, gh);
 });
 
+test('a copy made while the template was on a pre-release is offered the full release that follows it', async () => {
+  const user = await userCopy('1.2.0-rc.1');
+  const origin = await tempDir('origin');
+  await git(origin, ['init', '-q', '--bare']);
+  await git(user, ['remote', 'add', 'origin', origin]);
+  const upstream = await release('1.2.0');
+  const gh = await fakeGitHub({ upstream, tag: 'v1.2.0' });
+  const result = await update(user, gh);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(await gh.calls(), /^pr create/m);
+  assert.match(await gh.body(), /1\.2\.0-rc\.1 → 1\.2\.0/);
+});
+
 test('a template that has not published a release yet is left alone, and that is not a failure', async () => {
   const user = await userCopy();
   // What the real gh says, word for word, when a repository has no releases.
@@ -295,6 +309,8 @@ test('the update workflow does nothing, successfully, in the template repository
 // A copy's own workflows call the steps kept in the template's repository, so the steps improve without anyone
 // copying a workflow file by hand. Read as text: the template has no YAML parser, and these lines are the contract.
 const workflow = (name) => read(join(template, '.github/workflows', name));
+/** A job of a workflow, as text: the lines under its name. */
+const job = (text, name) => text.slice(text.indexOf('\njobs:')).match(new RegExp(`\\n {2}${name}:\\n((?: {4}.*\\n|\\n)+)`))?.[1] ?? '';
 
 test("a copy's Deploy and Update workflows call the template's, by the repository named in engine/UPSTREAM, at the tag of its version's major", async () => {
   const upstream = (await read(join(template, 'engine/UPSTREAM'))).trim();
@@ -317,39 +333,16 @@ test('the steps copies call still run the scripts at the paths copies have alway
   assert.match(await workflow('offer-update.yml'), /run: engine\/ci\/update\.sh/);
 });
 
-test('a release moves the v0 tag that copies call, and only in the template', async () => {
+test('a release made by hand moves the tag of its major version, which copies call, by the rule a merged one does, and only in the template', async () => {
   const text = await workflow('release.yml');
   assert.match(text, /^# whatiiif: template only\./);
-  assert.match(text, /if: github\.event\.repository\.is_template/);
-  assert.match(text, /git tag -f "\$major"/);
+  assert.doesNotMatch(text, /\bv0\b/, 'copies call the steps at the tag of their major version, v1 for 1.x');
   // A pre-release is for trying out: copies keep running the last full release.
   assert.match(text, /if: github\.event\.repository\.is_template && !github\.event\.release\.prerelease/);
-  assert.match(text, /::error title=\$major still points at the previous release::.*move it by hand/, 'a tag left behind says how to move it');
-});
-
-test('a release moves the tag of its major version, and only that: 1.0.0 moves v1, and v0 stays on the last 0.x release', async () => {
-  // The step's script, run as the workflow runs it, in a clone of a repository whose releases are tagged.
-  const text = await workflow('release.yml');
-  const [, block] = text.match(/\n {8}run: \|\n((?: {10}.*\n)+)/);
-  const script = block.replace(/^ {10}/gm, '');
-  const origin = await tempDir('origin');
-  await git(origin, ['init', '-q', '--bare']);
-  const here = await tempDir('here');
-  await git(here, ['init', '-q']);
-  await writeFile(join(here, 'a'), '0.4.0');
-  await commit(here, '0.4.0');
-  await git(here, ['tag', 'v0.4.0']);
-  await git(here, ['tag', 'v0']);
-  await writeFile(join(here, 'a'), '1.0.0');
-  await commit(here, '1.0.0');
-  await git(here, ['tag', 'v1.0.0']);
-  await git(here, ['remote', 'add', 'origin', origin]);
-  await git(here, ['push', '-q', 'origin', 'HEAD:main', '--tags']);
-  const moved = await run('bash', ['-c', script], { cwd: here, env: { TAG: 'v1.0.0' } });
-  assert.equal(moved.code, 0, moved.stderr);
-  const tagged = async (tag) => (await git(origin, ['rev-parse', `${tag}^{commit}`])).stdout.trim();
-  assert.equal(await tagged('v1'), await tagged('v1.0.0'));
-  assert.equal(await tagged('v0'), await tagged('v0.4.0'));
+  assert.match(text, /run: bash \.github\/release\.sh point "\$TAG"/);
+  assert.match(text, /TAG: \$\{\{ github\.event\.release\.tag_name \}\}/);
+  assert.match(text, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(text, /git tag -f/, 'the rule is release.sh’s alone');
 });
 
 test('packages are kept up to date in the template only, and checked before they are offered', async () => {
@@ -372,6 +365,15 @@ test("once both demos are up, the README's screenshots of them are remade on a M
   assert.match(job, /node engine\/test\/support\/readme-screenshots\.js/);
   assert.match(job, /contents: write/);
   assert.match(job, /git push -q origin HEAD:main/);
+});
+
+test('the screenshots, pushed straight to main, pass the Version check main requires of every commit, which GitHub runs for no push a workflow makes', async () => {
+  const job = (await workflow('live.yml')).slice((await workflow('live.yml')).indexOf('\n  screenshots:'));
+  assert.match(job, /^ {6}statuses: write\b/m);
+  const steps = ['bash .github/release.sh check origin/main', 'git push -q -f origin HEAD:refs/heads/readme-screenshots', '-f context=version', 'git push -q origin HEAD:main'];
+  const at = steps.map((step) => job.indexOf(step));
+  assert.ok(at.every((where, i) => where > 0 && (i === 0 || where > at[i - 1])), `checked, its commit given to GitHub, marked as checked, then pushed: ${at}`);
+  assert.match(job, /git push -q origin :refs\/heads\/readme-screenshots/, 'the branch it was given on is gone again');
 });
 
 /**
@@ -430,30 +432,512 @@ test('main is production: Live runs on every push to main, whatever changed, so 
   assert.doesNotMatch(text, /\n {4}paths:/);
 });
 
-/** The script of the Live step that checks sites have the shared steps on main, run in a repository like this one. */
-async function checkReleased({ release, main }) {
-  const text = await workflow('live.yml');
-  const [, block] = text.match(/name: Check that sites have the shared steps on main\n {8}run: \|\n((?: {10}.*\n)+)/);
+// Releasing: the version in engine/VERSION is the one thing anyone changes (.github/release.sh). A pull request that
+// changes what sites get raises it; merging that releases it; and Live fails if main ever gets ahead of a release.
+const releaseScript = join(template, '.github/release.sh');
+
+/** The package files of a template built with sharp, and developed with typescript, at those versions. */
+const packages = (dir, { sharp = '0.34.1', typescript = '5.9.0' } = {}) =>
+  Promise.all([
+    writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'whatiiif', dependencies: { sharp: '^0.34.0' }, devDependencies: { typescript: `^${typescript}` } }, null, 2)),
+    writeFile(
+      join(dir, 'package-lock.json'),
+      JSON.stringify(
+        {
+          name: 'whatiiif',
+          lockfileVersion: 3,
+          packages: {
+            '': { name: 'whatiiif', dependencies: { sharp: '^0.34.0' }, devDependencies: { typescript: `^${typescript}` } },
+            'node_modules/sharp': { version: sharp },
+            'node_modules/typescript': { version: typescript, dev: true },
+          },
+        },
+        null,
+        2,
+      ),
+    ),
+  ]);
+
+/**
+ * A repository like this one, released at 1.1.0 (tagged v1.1.0, with v1 and v0 too, and a GitHub release), its origin
+ * a bare repository, and a `gh` that makes releases there and says which pull request brought a commit to main: by
+ * default, one merged with a merge commit, the commit itself. `pulls(sha, [pull(…)])` gives another answer for a
+ * commit, `apiFails()` makes every answer an error, and `releaseMade(tag)` makes a GitHub release for a tag without
+ * its tag. `change` makes main's next commit. The script runs as on main, whatever the run of these tests is on.
+ */
+async function released(change = async () => {}, scriptEnv = {}) {
+  const origin = await tempDir('origin');
+  await git(origin, ['init', '-q', '--bare']);
   const here = await tempDir('here');
   await git(here, ['init', '-q']);
-  await mkdir(join(here, 'engine'), { recursive: true });
-  await mkdir(join(here, '.github/workflows'), { recursive: true });
-  await writeFile(join(here, 'engine/VERSION'), '1.0.0\n');
-  for (const [file, steps] of Object.entries(release)) await writeFile(join(here, '.github/workflows', file), steps);
-  await commit(here, '1.0.0');
-  await git(here, ['tag', 'v1']);
-  for (const [file, steps] of Object.entries(main)) await writeFile(join(here, '.github/workflows', file), steps);
-  await writeFile(join(here, 'README.md'), 'Changed on main since.\n'); // main has moved on, whether or not the steps have
+  await mkdir(join(here, 'engine/lib'), { recursive: true });
+  await mkdir(join(here, 'engine/test'), { recursive: true });
+  await writeFile(join(here, 'engine/VERSION'), '1.1.0\n');
+  await writeFile(join(here, 'engine/lib/build.js'), 'build\n');
+  await writeFile(join(here, 'README.md'), 'Read me.\n');
+  await packages(here);
+  await commit(here, '1.1.0');
+  for (const tag of ['v1.1.0', 'v1']) await git(here, ['tag', tag]);
+  await git(here, ['tag', 'v0', 'HEAD']);
+  await git(here, ['remote', 'add', 'origin', origin]);
+  await git(here, ['push', '-q', 'origin', 'HEAD:refs/heads/main', '--tags']);
+  const base = (await git(here, ['rev-parse', 'HEAD'])).stdout.trim();
+  await change(here);
   await commit(here, 'main');
-  return run('bash', ['-c', block.replace(/^ {10}/gm, '')], { cwd: here });
+  const bin = await tempDir('bin');
+  const log = join(bin, 'calls');
+  await mkdir(join(bin, 'pulls'));
+  await writeFile(join(bin, 'pull.json'), JSON.stringify([pull({ merge_commit_sha: '@SHA@' })]));
+  await writeFile(join(bin, 'releases'), 'v1.1.0\n');
+  await writeFile(
+    join(bin, 'gh'),
+    `#!/bin/bash
+echo "$*" >> "${log}"
+case "$1 $2" in
+  "api repos/someone/whatiiif/commits/"*)
+    [ -e "${bin}/api-fails" ] && { echo 'HTTP 403: Resource not accessible by integration' >&2; exit 1; }
+    sha=\${2#repos/someone/whatiiif/commits/}; sha=\${sha%/pulls}
+    if [ -e "${bin}/pulls/$sha" ]; then cat "${bin}/pulls/$sha"; else sed "s/@SHA@/$sha/" "${bin}/pull.json"; fi ;;
+  "release view")
+    grep -qx "$3" "${bin}/releases" && { echo "$3"; exit 0; }
+    echo 'release not found' >&2; exit 1 ;;
+  "release create")
+    tag=$3; target=; notes=
+    while [ $# -gt 0 ]; do case "$1" in --target) target=$2 ;; --notes-file) notes=$2 ;; esac; shift; done
+    [ -n "$notes" ] && cp "$notes" "${log}.notes"
+    git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || git push -q origin "$target:refs/tags/$tag"
+    echo "$tag" >> "${bin}/releases" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+  );
+  await chmod(join(bin, 'gh'), 0o755);
+  await writeFile(log, '');
+  const script = (...args) =>
+    run('bash', [releaseScript, ...args], {
+      cwd: here,
+      env: { PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'someone/whatiiif', GITHUB_REF: 'refs/heads/main', ...scriptEnv },
+    });
+  const tagged = async (tag) => (await run('git', ['rev-parse', '-q', '--verify', `${tag}^{commit}`], { cwd: origin })).stdout.trim();
+  return {
+    here,
+    bin,
+    base,
+    script,
+    tagged,
+    head: (await git(here, ['rev-parse', 'HEAD'])).stdout.trim(),
+    calls: () => read(log),
+    notes: () => read(`${log}.notes`),
+    pulls: (sha, list) => writeFile(join(bin, 'pulls', sha), JSON.stringify(list)),
+    apiFails: () => writeFile(join(bin, 'api-fails'), ''),
+    releaseMade: async (tag) => writeFile(join(bin, 'releases'), `${await read(join(bin, 'releases'))}${tag}\n`),
+  };
+}
+/** A pull request merged into main, as GitHub's API gives one, its description written for the people who use WhatIIIF. */
+const pull = (fields) => ({
+  number: 7,
+  merged_at: '2026-10-16T00:00:00Z',
+  base: { ref: 'main' },
+  user: { login: 'someone', type: 'User' },
+  body: '## For you\n\nA new thing.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)',
+  ...fields,
+});
+const raise = (version) => (dir) => writeFile(join(dir, 'engine/VERSION'), `${version}\n`);
+const changeSites = (dir) => writeFile(join(dir, 'engine/lib/build.js'), 'better build\n');
+const sha = async (dir, rev) => (await git(dir, ['rev-parse', rev])).stdout.trim();
+
+test('a pull request that changes what sites get must raise engine/VERSION; one that does not, need not', async () => {
+  const unraised = await released(changeSites);
+  const refused = await unraised.script('check', unraised.base);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stdout, /::error title=Raise engine\/VERSION::This changes what sites get \(engine\/lib\/build\.js\), so it is a new version: raise engine\/VERSION above 1\.1\.0/);
+
+  for (const [what, change] of [
+    ['the README', (dir) => writeFile(join(dir, 'README.md'), 'Read me again.\n')],
+    ['a test', (dir) => writeFile(join(dir, 'engine/test/a.test.js'), 'test\n')],
+  ]) {
+    const docs = await released(change);
+    assert.equal((await docs.script('check', docs.base)).code, 0, what);
+  }
+
+  const raised = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+  });
+  const passed = await raised.script('check', raised.base);
+  assert.equal(passed.code, 0, passed.stdout);
+  assert.match(passed.stdout, /Merging this releases 1\.2\.0\./);
+
+  // Run by hand before committing, it reads every file as it is, engine/VERSION too.
+  const uncommitted = await released((dir) => writeFile(join(dir, 'README.md'), 'Read me again.\n'));
+  await changeSites(uncommitted.here);
+  await raise('1.2.0')(uncommitted.here);
+  const before = await uncommitted.script('check', uncommitted.base);
+  assert.equal(before.code, 0, before.stdout);
+  assert.match(before.stdout, /Merging this releases 1\.2\.0\./);
+
+  const lowered = await released(raise('1.0.9'));
+  const backwards = await lowered.script('check', lowered.base);
+  assert.equal(backwards.code, 1);
+  assert.match(backwards.stdout, /::error title=engine\/VERSION must go up::1\.0\.9 is not above 1\.1\.0/);
+
+  for (const [from, to] of [['1.2.0-rc.1', '1.2.0'], ['1.9.0', '1.10.0'], ['1.2.0-rc.1', '1.2.0-rc.2']]) {
+    const promoted = await released(async (dir) => {
+      await raise(from)(dir);
+      await commit(dir, from);
+      await git(dir, ['tag', `v${from}`]);
+      await raise(to)(dir);
+    });
+    const base = (await git(promoted.here, ['rev-parse', 'HEAD~1'])).stdout.trim();
+    const passed = await promoted.script('check', base);
+    assert.equal(passed.code, 0, `${from} to ${to}: ${passed.stdout}`);
+  }
+
+  for (const odd of ['1.2', 'v1.2.0', '1.2.0.0', 'one']) {
+    const malformed = await released(raise(odd));
+    const refused = await malformed.script('check', malformed.base);
+    assert.equal(refused.code, 1, odd);
+    assert.match(refused.stdout, /::error title=engine\/VERSION is not a version::/, odd);
+  }
+});
+
+test('what a site made from the template starts with is part of its version: its settings file and .gitignore too', async () => {
+  for (const [file, text] of [['content/whatiiif.toml', '# title = "Your picture"\n'], ['.gitignore', 'node_modules/\n']]) {
+    const changed = await released(async (dir) => {
+      await mkdir(join(dir, 'content'), { recursive: true });
+      await writeFile(join(dir, file), text);
+    });
+    const refused = await changed.script('check', changed.base);
+    assert.equal(refused.code, 1, file);
+    assert.match(refused.stdout, new RegExp(`This changes what sites get \\(${file.replace('.', '\\.')}\\)`), file);
+  }
+});
+
+test('the packages sites install are part of their version; those only for developing WhatIIIF, which sites never install, are not', async () => {
+  const developing = await released((dir) => packages(dir, { typescript: '5.9.3' }));
+  const fine = await developing.script('check', developing.base);
+  assert.equal(fine.code, 0, fine.stdout);
+  assert.match(fine.stdout, /Nothing sites get changes/);
+
+  const building = await released((dir) => packages(dir, { sharp: '0.34.2' }));
+  const refused = await building.script('check', building.base);
+  assert.equal(refused.code, 1);
+  assert.match(refused.stdout, /This changes what sites get \(package-lock\.json\)/);
+});
+
+test('the next patch version, which the weekly package update raises engine/VERSION to, of a release and of a pre-release', async () => {
+  for (const [now, next] of [['1.4.0', '1.4.1'], ['1.9.9', '1.9.10'], ['1.2.0-rc.1', '1.2.0-rc.2'], ['1.2.0-beta', '1.2.0-beta.1']]) {
+    const at = await released(raise(now));
+    const result = await at.script('next');
+    assert.equal(result.code, 0, `${now}: ${result.stderr}`);
+    assert.equal(result.stdout, `${next}\n`, now);
+  }
+});
+
+test('merging a new engine/VERSION releases it: the tag, the GitHub release with the pull request’s words, and v1, which sites call', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+  });
+  const result = await merged.script('release');
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(await merged.calls(), new RegExp(`^release create v1\\.2\\.0 --target ${merged.head} --title WhatIIIF 1\\.2\\.0 --notes-file `, 'm'));
+  assert.equal(await merged.notes(), '## For you\n\nA new thing.\n\n', 'the pull request’s description, without its tool line');
+  assert.equal(await merged.tagged('v1.2.0'), merged.head);
+  assert.equal(await merged.tagged('v1'), merged.head);
+  assert.equal(await merged.tagged('v0'), merged.base, 'another major version’s tag is left alone');
+
+  const again = await merged.script('release');
+  assert.equal(again.code, 0);
+  assert.match(again.stdout, /1\.2\.0 is released already\./);
+  assert.equal((await merged.calls()).match(/release create/g).length, 1, 'released once');
+});
+
+test('versions merged one after another are each released, at the commit that made them, however few Live runs there were', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+    await commit(dir, '1.2.0');
+    await writeFile(join(dir, 'engine/lib/build.js'), 'better still\n');
+    await raise('1.3.0')(dir);
+  });
+  const first = (await git(merged.here, ['rev-parse', 'HEAD~1'])).stdout.trim();
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.tagged('v1.2.0'), first);
+  assert.equal(await merged.tagged('v1.3.0'), merged.head);
+  assert.equal(await merged.tagged('v1'), merged.head);
+});
+
+test('a full release followed in the same Live run by a pre-release still moves v1 to the full release', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+    await commit(dir, '1.2.0');
+    await raise('1.3.0-rc.1')(dir);
+  });
+  const full = (await git(merged.here, ['rev-parse', 'HEAD~1'])).stdout.trim();
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.tagged('v1.2.0'), full);
+  assert.equal(await merged.tagged('v1.3.0-rc.1'), merged.head);
+  assert.equal(await merged.tagged('v1'), full);
+});
+
+test('a major version’s tag already on a later release is never moved back', async () => {
+  const merged = await released(raise('1.2.0'));
+  await raise('1.3.0')(merged.here);
+  await commit(merged.here, '1.3.0, released by hand');
+  await git(merged.here, ['push', '-q', '-f', 'origin', 'HEAD:refs/tags/v1']);
+  const later = (await git(merged.here, ['rev-parse', 'HEAD'])).stdout.trim();
+  await git(merged.here, ['reset', '-q', '--hard', 'HEAD~1']);
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.tagged('v1.2.0'), merged.head);
+  assert.equal(await merged.tagged('v1'), later);
+});
+
+test('a release left half made, its tag made but v1 not moved, is finished when Live runs again', async () => {
+  const merged = await released(raise('1.2.0'));
+  await git(merged.here, ['push', '-q', 'origin', 'HEAD:refs/tags/v1.2.0']); // released, but v1 left behind
+  await merged.releaseMade('v1.2.0');
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.tagged('v1'), merged.head);
+  assert.doesNotMatch(await merged.calls(), /release create/, 'not released twice');
+});
+
+test('a version tagged without a GitHub release, which copies would never be offered, is given its release', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+  });
+  await git(merged.here, ['push', '-q', 'origin', 'HEAD:refs/tags/v1.2.0']); // as by hand: a tag, and nothing more
+  const tagOnly = await merged.script('released');
+  assert.equal(tagOnly.code, 1);
+  assert.match(tagOnly.stdout, /::error title=1\.2\.0 is not released::/);
+
+  assert.equal((await merged.script('release')).code, 0);
+  assert.match(await merged.calls(), /^release create v1\.2\.0 /m);
+  assert.equal(await merged.tagged('v1.2.0'), merged.head);
+  assert.equal(await merged.tagged('v1'), merged.head);
+  const fine = await merged.script('released');
+  assert.equal(fine.code, 0, fine.stdout);
+});
+
+test('a pull request merged by rebasing is released at its last commit: not the one that raised engine/VERSION, nor the next pull request’s', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+    await commit(dir, 'Raise engine/VERSION');
+    await writeFile(join(dir, 'engine/lib/build.js'), 'better build, after review\n');
+    await commit(dir, 'After review');
+    // The next pull request, merged before Live ran: a change, then its own new version.
+    await writeFile(join(dir, 'engine/lib/build.js'), 'the next pull request\n');
+    await commit(dir, 'The next pull request');
+    await raise('1.3.0')(dir);
+  });
+  // GitHub names the commit main was moved to as the pull request's merge commit, whichever way it was merged.
+  const last = await sha(merged.here, 'HEAD~2');
+  await merged.pulls(await sha(merged.here, 'HEAD~3'), [pull({ merge_commit_sha: last })]);
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.tagged('v1.2.0'), last);
+  assert.equal(await merged.tagged('v1.3.0'), merged.head);
+  assert.equal(await merged.tagged('v1'), merged.head);
+  const fine = await merged.script('released');
+  assert.equal(fine.code, 0, fine.stdout);
+});
+
+test('a version pushed to main with no pull request is released at main’s latest commit, with GitHub’s own notes', async () => {
+  const pushed = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+    await commit(dir, 'Raise engine/VERSION');
+    await writeFile(join(dir, 'engine/lib/build.js'), 'better build, pushed after\n');
+  });
+  await pushed.pulls(await sha(pushed.here, 'HEAD~1'), []);
+  assert.equal((await pushed.script('release')).code, 0);
+  assert.match(await pushed.calls(), new RegExp(`^release create v1\\.2\\.0 --target ${pushed.head} --title WhatIIIF 1\\.2\\.0 --generate-notes$`, 'm'));
+  assert.equal(await pushed.tagged('v1'), pushed.head);
+});
+
+test('a release’s words are those of the pull request merged into main, not of another that holds the same commit', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+  });
+  await merged.pulls(merged.head, [
+    pull({ number: 8, merged_at: null, merge_commit_sha: null, body: 'Still being written, on top of #7.' }),
+    pull({ number: 9, base: { ref: 'an-idea' }, merge_commit_sha: merged.head, body: 'Into another branch.' }),
+    pull({ merge_commit_sha: merged.head }),
+  ]);
+  assert.equal((await merged.script('release')).code, 0);
+  assert.equal(await merged.notes(), '## For you\n\nA new thing.\n\n');
+});
+
+test('a pull request from Dependabot, its description written for whoever merges it, is released with GitHub’s own notes', async () => {
+  const merged = await released(async (dir) => {
+    await packages(dir, { sharp: '0.34.2' });
+    await raise('1.1.1')(dir);
+  });
+  await merged.pulls(merged.head, [
+    pull({ merge_commit_sha: merged.head, user: { login: 'dependabot[bot]', type: 'Bot' }, body: 'Bumps sharp from 0.34.1 to 0.34.2.\n\nDependabot commands and options' }),
+  ]);
+  assert.equal((await merged.script('release')).code, 0);
+  assert.match(await merged.calls(), /^release create v1\.1\.1 .* --generate-notes$/m);
+});
+
+test('when GitHub cannot say which pull request brought a version, nothing is released, and the run fails saying why', async () => {
+  const merged = await released(async (dir) => {
+    await changeSites(dir);
+    await raise('1.2.0')(dir);
+  });
+  await merged.apiFails();
+  const result = await merged.script('release');
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /HTTP 403/);
+  assert.doesNotMatch(await merged.calls(), /release create/);
+  assert.equal(await merged.tagged('v1.2.0'), '');
+});
+
+test('when v1 cannot be fetched to see where it is, it is left there and the run fails, rather than moved blind', async () => {
+  const merged = await released(raise('1.2.0'));
+  await raise('1.3.0')(merged.here);
+  await commit(merged.here, '1.3.0, released by hand');
+  await git(merged.here, ['push', '-q', '-f', 'origin', 'HEAD:refs/tags/v1']);
+  const later = await sha(merged.here, 'HEAD');
+  await git(merged.here, ['reset', '-q', '--hard', 'HEAD~1']);
+  const realGit = (await run('bash', ['-c', 'command -v git'])).stdout.trim();
+  await writeFile(
+    join(merged.bin, 'git'),
+    `#!/bin/bash
+if [ "$1" = fetch ] && [[ " $* " == *" refs/tags/v1:refs/tags/v1 "* ]]; then echo 'fatal: unable to access origin' >&2; exit 128; fi
+exec "${realGit}" "$@"
+`,
+  );
+  await chmod(join(merged.bin, 'git'), 0o755);
+  const result = await merged.script('release');
+  assert.notEqual(result.code, 0);
+  assert.equal(await merged.tagged('v1'), later);
+});
+
+test('releases are made from main alone: Live run by hand on another branch releases nothing', async () => {
+  const branch = await released(raise('1.2.0'), { GITHUB_REF: 'refs/heads/an-idea' });
+  const result = await branch.script('release');
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Releases are made from main: this is refs\/heads\/an-idea\./);
+  assert.equal(await branch.tagged('v1.2.0'), '');
+});
+
+/** In a repository made by `released`, a release of `version` made by hand, on a commit of its own off 1.1.0's. */
+async function byHand(at, version) {
+  await git(at.here, ['checkout', '-q', '--detach', at.base]);
+  await raise(version)(at.here);
+  await commit(at.here, version);
+  await git(at.here, ['push', '-q', 'origin', `HEAD:refs/tags/v${version}`]);
+  await at.releaseMade(`v${version}`);
+  const made = await sha(at.here, 'HEAD');
+  await git(at.here, ['checkout', '-q', '-']);
+  return made;
 }
 
-test('Live fails when the shared steps on main are not yet the ones sites run, at the tag of their major version', async () => {
-  const released = { 'publish.yml': 'steps\n', 'offer-update.yml': 'offer\n' };
-  assert.equal((await checkReleased({ release: released, main: released })).code, 0);
-  const ahead = await checkReleased({ release: released, main: { ...released, 'publish.yml': 'better steps\n' } });
-  assert.equal(ahead.code, 1);
-  assert.match(ahead.stdout, /::error title=Sites do not have the shared steps on main::\.github\/workflows\/publish\.yml differs from v1/);
+test('a release made by hand moves its major version’s tag forward, but never back from a later release, nor to a pre-release', async () => {
+  const merged = await released(raise('1.2.0'));
+  assert.equal((await merged.script('release')).code, 0); // 1.2.0, released on merging, and v1 on it
+  const point = async (version) => {
+    const result = await merged.script('point', `v${version}`);
+    assert.equal(result.code, 0, `${version}: ${result.stdout}${result.stderr}`);
+  };
+
+  await byHand(merged, '1.1.2'); // a fix to the line before
+  await point('1.1.2');
+  assert.equal(await merged.tagged('v1'), merged.head, 'v1 stays on 1.2.0');
+
+  const later = await byHand(merged, '1.3.0');
+  await point('1.3.0');
+  assert.equal(await merged.tagged('v1'), later);
+
+  await byHand(merged, '1.4.0-rc.1');
+  await point('1.4.0-rc.1');
+  assert.equal(await merged.tagged('v1'), later, 'a pre-release moves nothing');
+
+  const two = await byHand(merged, '2.0.0');
+  await point('2.0.0');
+  assert.equal(await merged.tagged('v2'), two);
+  assert.equal(await merged.tagged('v1'), later, 'only its own major version’s tag');
+});
+
+test('when the major version’s tag cannot be moved, the run fails and says how to move it by hand', async () => {
+  const merged = await released(raise('1.2.0'));
+  await merged.releaseMade('v1.2.0');
+  await git(merged.here, ['push', '-q', 'origin', 'HEAD:refs/tags/v1.2.0']);
+  const realGit = (await run('bash', ['-c', 'command -v git'])).stdout.trim();
+  await writeFile(
+    join(merged.bin, 'git'),
+    `#!/bin/bash
+if [ "$1" = push ] && [[ " $* " == *" refs/tags/v1 "* ]]; then echo 'remote: refusing' >&2; exit 1; fi
+exec "${realGit}" "$@"
+`,
+  );
+  await chmod(join(merged.bin, 'git'), 0o755);
+  const result = await merged.script('point', 'v1.2.0');
+  assert.notEqual(result.code, 0);
+  assert.match(result.stdout, /::error title=v1 still points at the previous release::.*move it by hand: .*git tag -f v1 v1\.2\.0/);
+  assert.equal(await merged.tagged('v1'), merged.base);
+});
+
+test('a pre-release is released as one, and leaves v1 on the last full release', async () => {
+  const merged = await released(raise('1.2.0-rc.1'));
+  assert.equal((await merged.script('release')).code, 0);
+  assert.match(await merged.calls(), /^release create v1\.2\.0-rc\.1 .* --prerelease$/m);
+  assert.equal(await merged.tagged('v1'), merged.base);
+  const fine = await merged.script('released');
+  assert.equal(fine.code, 0, fine.stdout);
+  assert.match(fine.stdout, /Everything sites get on main is in 1\.2\.0-rc\.1, a pre-release: v1, which sites call, stays on the last full release\./);
+});
+
+test('Live fails when main is ahead of the release of its engine/VERSION, or v1 is not on it', async () => {
+  const docs = await released((dir) => writeFile(join(dir, 'README.md'), 'Read me again.\n'));
+  const fine = await docs.script('released');
+  assert.equal(fine.code, 0, fine.stdout);
+  assert.match(fine.stdout, /Everything sites get on main is in 1\.1\.0, and v1 points at it\./);
+
+  const ahead = await released(changeSites);
+  const behind = await ahead.script('released');
+  assert.equal(behind.code, 1);
+  assert.match(behind.stdout, /::error title=main is ahead of v1\.1\.0::engine\/lib\/build\.js changed since 1\.1\.0 was released, without a new version/);
+
+  const unreleased = await released(raise('1.2.0'));
+  const missing = await unreleased.script('released');
+  assert.equal(missing.code, 1);
+  assert.match(missing.stdout, /::error title=1\.2\.0 is not released::/);
+});
+
+test('releasing runs first in Live, so the demos and checks see the release; pull requests are checked for a version', async () => {
+  const live = await workflow('live.yml');
+  assert.match(live, /\n {2}release:\n[\s\S]*?run: bash \.github\/release\.sh release\n/);
+  for (const job of ['demo', 'released']) assert.match(live, new RegExp(`\\n {2}${job}:\\n {4}needs: release\\n`), job);
+  assert.match(live, /run: bash \.github\/release\.sh released/);
+  const version = await workflow('version.yml');
+  assert.match(version, /^# whatiiif: template only\./);
+  assert.match(version, /\n {2}pull_request:\n/);
+  assert.match(version, /run: bash \.github\/release\.sh check "origin\/\$\{\{ github\.base_ref \}\}"/);
+  assert.match(await workflow('dependencies.yml'), /engine\/VERSION/, 'an update of the packages sites get is a new version too');
+  // The tests of .github/release.sh are in engine/test: CI runs them when it changes too.
+  assert.equal((await workflow('ci.yml')).match(/paths: \[[^\]]*'\.github\/\*\*'/g)?.length, 2);
+  // Releasing is the template's, as the Version check is: not the demos', whose variables a template of one's own may
+  // not have.
+  for (const name of ['release', 'released']) assert.match(job(live, name), /^ {4}if: github\.event\.repository\.is_template$/m, name);
+  assert.match(version, /^ {4}if: github\.event\.repository\.is_template$/m);
+  // The release's words are its pull request's, and the released check asks GitHub for the release itself.
+  assert.match(job(live, 'release'), /^ {6}pull-requests: read\b/m);
+  assert.match(job(live, 'released'), /GH_TOKEN: \$\{\{ github\.token \}\}/);
+});
+
+test('the weekly package update raises engine/VERSION only when the packages sites install change, and its release notes are for the people who use WhatIIIF', async () => {
+  const text = await workflow('dependencies.yml');
+  assert.match(text, /if \[\[ -n "\$\(bash \.github\/release\.sh changed HEAD\)" \]\]; then/);
+  assert.match(text, /next=\$\(bash \.github\/release\.sh next\)\n\s+echo "\$next" > engine\/VERSION/);
+  assert.doesNotMatch(text, /\$\{version%\.\*\}/, 'the next version is release.sh’s, pre-releases and all');
+  assert.match(text, /npm ls --depth=0 --omit=dev --json/, 'the notes list the packages sites install');
+  assert.match(text, /## For you/);
+  assert.match(text, /gh pr comment/, 'what whoever merges it needs to know is a comment, not the release notes');
 });
 
 test('the trials in new repositories made from the template are run by hand, not by Live, which would need a token that may make and delete repositories', async () => {
@@ -474,4 +958,13 @@ test('after each change, the Live workflow publishes the template to both demos,
   // Kept in step after every release and every day too, not only after a change.
   assert.match(text, /\n {2}release:\n {4}types: \[published\]/);
   assert.match(text, /\n {2}schedule:\n {4}- cron: /);
+});
+
+test('a release made by hand, perhaps a fix to an older line, starts Live on main: the demos and the checks are of main, not of its tag', async () => {
+  const text = await workflow('live.yml');
+  const checkouts = text.match(/- uses: actions\/checkout@v\d+\n/g).length;
+  const ofMain = text.match(/- uses: actions\/checkout@v\d+\n {8}with:\n(?: {10}\S.*\n)*? {10}ref: \$\{\{ github\.event_name == 'release' && 'main' \|\| '' \}\}/g)?.length;
+  assert.equal(ofMain, checkouts, 'every job checks out main when a release starts it');
+  // The screenshots' commit names the commit of main they were made from, not the release's.
+  assert.doesNotMatch(text, /GITHUB_SHA/);
 });

@@ -9,16 +9,22 @@ const ENGINE = new URL('../', import.meta.url); // engine/, which holds VERSION 
 /** Text that can go in an HTML comment: `--` would end it, so an address's second hyphen is written %2D. */
 const commentable = (text) => text.replace(/--/g, '-%2D');
 
+/** The version of WhatIIIF making the site, and WhatIIIF's address. */
+export async function whatiiif() {
+  const [version, upstream] = await Promise.all(['VERSION', 'UPSTREAM'].map(async (name) => (await readFile(new URL(name, ENGINE), 'utf8')).trim()));
+  return { version, url: `https://github.com/${upstream}` };
+}
+
 /**
  * The comment at the top of every published page: that WhatIIIF made it, which version, where WhatIIIF is, and, in a
  * workflow run, the repository the site is made from.
  */
 export async function banner(repository) {
-  const [version, upstream] = await Promise.all(['VERSION', 'UPSTREAM'].map(async (name) => (await readFile(new URL(name, ENGINE), 'utf8')).trim()));
+  const { version, url } = await whatiiif();
   const rule = `  ${'='.repeat(76)}`;
   const lines = [
     `Published with WhatIIIF ${version}`,
-    `https://github.com/${upstream}`,
+    url,
     '',
     'One large picture on the web, zoomable, and published as IIIF.',
     ...(repository ? ['', 'This site is made from', `https://github.com/${repository}`] : []),
