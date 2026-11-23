@@ -1,7 +1,6 @@
 // The Update workflow on real GitHub, as someone using the template meets it: a copy on the previous release, its
 // picture published, is offered the latest release as a pull request, and merging that republishes the site.
-// Needs two releases. Run by the Live workflow, or by hand with
-// `npm run test:live` (see trial.js).
+// Needs two releases. Run by hand with `npm run test:live` (see trial.js).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';

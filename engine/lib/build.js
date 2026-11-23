@@ -7,7 +7,7 @@ import { PAGES_BUDGET_BYTES, applyBudget } from './budget.js';
 import { missingFiles } from './service.js';
 import { buildManifest } from './manifest.js';
 import { committedToLfs, originalUrl, repositoryIsPublic } from './original.js';
-import { banner, makeCard, makeIcon, personalisePage, stamp, wholeImage } from './page.js';
+import { banner, makeCard, makeIcon, personalisePage, stamp, wholeImage, whatiiif } from './page.js';
 
 const LOCAL_BASE_URL = 'http://localhost:4173';
 const LOWEST_QUALITY = 45; // below this, JPEG tiles look blocky up close
@@ -119,6 +119,8 @@ export async function build({ contentDir, outDir, env = process.env, log = () =>
       width: info.width,
       height: info.height,
       pageUrl,
+      // The line at the foot of the page: the version of WhatIIIF that made it, and where WhatIIIF is.
+      footer: config.publish.footer ? await whatiiif() : undefined,
     };
     await writeFile(join(outDir, 'site.json'), JSON.stringify(site, null, 2));
     // For the settings helper (settings.html) and the notes helper (notes.html): the settings and notes as written,

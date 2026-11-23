@@ -12,38 +12,33 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { browse, commit, deploy, repo, templateCopy } from './harness.js';
+import { looksDifferent } from './looks-different.js';
 
 const DEMO = 'gjhilton/whatiiif-demo';
-const PICTURE = 'Concentric circles.png';
 const out = (name) => join(repo, 'engine/artwork', name);
+// Asked of GitHub's API with the workflow's token where there is one, which it limits less than strangers.
+const headers = process.env.GH_TOKEN ? { authorization: `Bearer ${process.env.GH_TOKEN}` } : {};
 
-/** A site built by this working tree from the `files` in `demo`'s content/, at its address on GitHub Pages. */
-async function demoSite(demo, files) {
+/**
+ * A site built by this working tree from everything in `demo`'s content/, at its address on GitHub Pages: the demo
+ * exactly, its settings too, so the screenshots show what the demo does.
+ */
+async function demoSite(demo) {
   const copy = await templateCopy();
-  for (const file of files) {
-    const response = await fetch(`https://raw.githubusercontent.com/${demo}/main/content/${encodeURIComponent(file)}`);
-    if (!response.ok) throw new Error(`${demo}'s ${file} could not be downloaded: ${response.status}`);
-    await writeFile(join(copy, 'content', file), Buffer.from(await response.arrayBuffer()));
+  const listing = await fetch(`https://api.github.com/repos/${demo}/contents/content`, { headers });
+  if (!listing.ok) throw new Error(`${demo}'s content/ could not be listed: ${listing.status}`);
+  for (const { name, type, download_url: url } of await listing.json()) {
+    if (type !== 'file' || name === '.gitkeep') continue;
+    const response = await fetch(url, { headers });
+    if (!response.ok) throw new Error(`${demo}'s ${name} could not be downloaded: ${response.status}`);
+    await writeFile(join(copy, 'content', name), Buffer.from(await response.arrayBuffer()));
   }
   await commit(copy, 'The demo');
   const built = await deploy(copy, { baseUrl: `https://gjhilton.github.io/${demo.split('/')[1]}`, repository: demo });
   if (!built.built) throw new Error(built.log);
   return built;
 }
-let site = await demoSite(DEMO, [PICTURE]);
-
-/** Whether two PNGs look different: a different size, or more than a few pixels clearly changed. */
-async function looksDifferent(png, file) {
-  const pixels = (input) => sharp(input).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const [now, before] = await Promise.all([pixels(png), pixels(file).catch(() => undefined)]);
-  if (!before || now.info.width !== before.info.width || now.info.height !== before.info.height) return true;
-  let changed = 0;
-  for (let i = 0; i < now.data.length; i += 4) {
-    const apart = Math.max(...[0, 1, 2].map((c) => Math.abs(now.data[i + c] - before.data[i + c])));
-    if (apart > 24) changed++;
-  }
-  return changed > 16;
-}
+let site = await demoSite(DEMO);
 
 const written = [];
 const browser = await chromium.launch();
@@ -73,7 +68,7 @@ await shoot('settings.png', {
     await page.evaluate(() => document.activeElement.blur()); // no focus ring in the picture
   },
 });
-site = await demoSite('gjhilton/whatiiif-demo-notes', ['A harbour.png', 'whatiiif.toml', 'description.md', 'notes.md']);
+site = await demoSite('gjhilton/whatiiif-demo-notes');
 await shoot('notes-demo.png', {
   query: '?viewer=openseadragon',
   size: { width: 1280, height: 1000 },

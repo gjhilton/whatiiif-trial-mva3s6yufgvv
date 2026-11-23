@@ -13,7 +13,7 @@ const TILE_SIZES = [64, 4096];
 const SETTINGS = {
   '': ['language', 'title', 'summary', 'creator', 'date', 'attribution', 'alt', 'rights', 'dimensions', 'picture', 'viewer', 'base_url', 'metadata', 'tiles', 'publish', 'colours'],
   tiles: ['size', 'quality'],
-  publish: ['full', 'original'],
+  publish: ['full', 'original', 'footer'],
   metadata: ['label', 'value'],
   // The page's colours, named as in engine/client/src/colours.css.
   colours: ['paper', 'ink', 'error', 'viewer'],
@@ -231,7 +231,11 @@ export function parseConfig(toml) {
       size: wholeNumber(tiles.size ?? 512, 'tiles.size', TILE_SIZES),
       quality: wholeNumber(tiles.quality ?? 85, 'tiles.quality', [1, 100]),
     },
-    publish: { full: yesOrNo(publish.full ?? true, 'publish.full'), original: yesOrNo(publish.original ?? true, 'publish.original') },
+    publish: {
+      full: yesOrNo(publish.full ?? true, 'publish.full'),
+      original: yesOrNo(publish.original ?? true, 'publish.original'),
+      footer: yesOrNo(publish.footer ?? true, 'publish.footer'),
+    },
     colours: colours(section(raw, 'colours')),
   };
 }
